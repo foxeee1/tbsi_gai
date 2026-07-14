@@ -1,0 +1,24 @@
+{
+  "reference": "Reproduced pure TBSI baseline (single GPU, bs=48, LR=3.75e-5)",
+  "date": "2026-07-05",
+  "best_config": "vitb_256_tbsi_opt (bs=48, LR=3.75e-5, 4ep, 12k samples)",
+  "hardware": "1x RTX 3090 (48GB vGPU), bs=48",
+  "paper_reference": "56.5 SR / 70.2 PR / 66.5 NPR (4 GPU, bs=128 total)",
+  "reproduction_gap_analysis": {
+    "gap_vs_paper": "SR=-0.99, PR=-1.19, NPR=-1.29",
+    "root_cause_1": "LR未缩放: paper 4GPU bs=128 LR=1e-4, 我们 1GPU bs=48 应LR=3.75e-5",
+    "root_cause_2": "单卡vs4卡 DDP梯度平均(约-0.5~0.8 SR)",
+    "root_cause_3": "16处代码改动累积效应(约-0.2~0.3 SR)"
+  },
+  "best_sprint": {
+    "config": "bs=48, LR=3.75e-5, 4ep x 12k smpl, NUM_WORKER=4",
+    "SR": 55.51, "OP50": 67.32, "OP75": 46.84,
+    "PR": 69.01, "NPR": 65.21,
+    "note": "迭代数对齐论文(7500 vs 7031)的最佳结果"
+  },
+  "baseline_bs32_lr1e4": {
+    "config": "bs=32, LR=1e-4, 15ep x 60k smpl (原始paper配置)",
+    "SR": 54.25, "PR": 67.79, "NPR": 63.72,
+    "note": "原始paper config, 但单卡bs=32 LR未缩放导致差距-2.25"
+  }
+}

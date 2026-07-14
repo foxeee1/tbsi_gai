@@ -1,0 +1,1841 @@
+{
+  "D1-stat": {
+    "SR": 55.95,
+    "OP50": 69.03,
+    "OP75": 45.72,
+    "MeanIoU": 56.99,
+    "PR": 71.18,
+    "NPR": 66.86,
+    "seq_metrics": {
+      "10runone": {
+        "AUC": 77.02,
+        "IoU": 78.34,
+        "Prec": 97.37,
+        "valid": true
+      },
+      "11leftboy": {
+        "AUC": 80.76,
+        "IoU": 82.22,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "11runtwo": {
+        "AUC": 69.33,
+        "IoU": 70.6,
+        "Prec": 87.46,
+        "valid": true
+      },
+      "1blackteacher": {
+        "AUC": 19.83,
+        "IoU": 20.25,
+        "Prec": 22.91,
+        "valid": true
+      },
+      "1boycoming": {
+        "AUC": 72.77,
+        "IoU": 73.87,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "1stcol4thboy": {
+        "AUC": 5.15,
+        "IoU": 5.12,
+        "Prec": 6.25,
+        "valid": true
+      },
+      "1strowleftboyturning": {
+        "AUC": 3.56,
+        "IoU": 3.63,
+        "Prec": 4.51,
+        "valid": true
+      },
+      "1strowrightdrillmaster": {
+        "AUC": 61.68,
+        "IoU": 62.32,
+        "Prec": 97.96,
+        "valid": true
+      },
+      "1strowrightgirl3540": {
+        "AUC": 22.16,
+        "IoU": 22.44,
+        "Prec": 26.58,
+        "valid": true
+      },
+      "2girl": {
+        "AUC": 72.18,
+        "IoU": 73.49,
+        "Prec": 97.75,
+        "valid": true
+      },
+      "2girlup": {
+        "AUC": 5.62,
+        "IoU": 5.68,
+        "Prec": 9.66,
+        "valid": true
+      },
+      "2runseven": {
+        "AUC": 79.22,
+        "IoU": 80.58,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "3bike1": {
+        "AUC": 69.47,
+        "IoU": 70.18,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "3men": {
+        "AUC": 72.82,
+        "IoU": 74.16,
+        "Prec": 97.24,
+        "valid": true
+      },
+      "3pinkleft": {
+        "AUC": 66.24,
+        "IoU": 68.83,
+        "Prec": 79.06,
+        "valid": true
+      },
+      "3rdfatboy": {
+        "AUC": 75.13,
+        "IoU": 76.39,
+        "Prec": 96.98,
+        "valid": true
+      },
+      "3rdgrouplastboy": {
+        "AUC": 47.22,
+        "IoU": 47.67,
+        "Prec": 75.84,
+        "valid": true
+      },
+      "3thmoto": {
+        "AUC": 75.96,
+        "IoU": 77.26,
+        "Prec": 88.46,
+        "valid": true
+      },
+      "4men": {
+        "AUC": 16.22,
+        "IoU": 16.35,
+        "Prec": 23.91,
+        "valid": true
+      },
+      "4thboywithwhite": {
+        "AUC": 31.66,
+        "IoU": 31.95,
+        "Prec": 41.27,
+        "valid": true
+      },
+      "7rightorangegirl": {
+        "AUC": 46.59,
+        "IoU": 47.27,
+        "Prec": 60.99,
+        "valid": true
+      },
+      "AQgirlwalkinrain": {
+        "AUC": 35.43,
+        "IoU": 35.89,
+        "Prec": 52.15,
+        "valid": true
+      },
+      "AQtruck2north": {
+        "AUC": 81.35,
+        "IoU": 83.02,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "ab_bikeoccluded": {
+        "AUC": 67.22,
+        "IoU": 77.24,
+        "Prec": 86.97,
+        "valid": true
+      },
+      "ab_blkskirtgirl": {
+        "AUC": 62.28,
+        "IoU": 63.41,
+        "Prec": 80.74,
+        "valid": true
+      },
+      "ab_bolstershaking": {
+        "AUC": 51.55,
+        "IoU": 51.64,
+        "Prec": 54.17,
+        "valid": true
+      },
+      "ab_girlchoosesbike": {
+        "AUC": 71.68,
+        "IoU": 72.85,
+        "Prec": 95.69,
+        "valid": true
+      },
+      "ab_girlcrossroad": {
+        "AUC": 56.7,
+        "IoU": 62.77,
+        "Prec": 79.9,
+        "valid": true
+      },
+      "ab_pingpongball2": {
+        "AUC": 3.49,
+        "IoU": 3.55,
+        "Prec": 5.15,
+        "valid": true
+      },
+      "ab_rightlowerredcup_quezhen": {
+        "AUC": 26.79,
+        "IoU": 26.34,
+        "Prec": 25.69,
+        "valid": true
+      },
+      "ab_whiteboywithbluebag": {
+        "AUC": 26.8,
+        "IoU": 27.78,
+        "Prec": 27.99,
+        "valid": true
+      },
+      "baggirl": {
+        "AUC": 68.85,
+        "IoU": 69.48,
+        "Prec": 78.38,
+        "valid": true
+      },
+      "ballshootatthebasket3times": {
+        "AUC": 43.11,
+        "IoU": 43.94,
+        "Prec": 61.26,
+        "valid": true
+      },
+      "basketball849": {
+        "AUC": 2.5,
+        "IoU": 2.82,
+        "Prec": 3.53,
+        "valid": true
+      },
+      "basketballathand": {
+        "AUC": 30.36,
+        "IoU": 30.37,
+        "Prec": 43.75,
+        "valid": true
+      },
+      "basketboy": {
+        "AUC": 68.12,
+        "IoU": 69.01,
+        "Prec": 97.65,
+        "valid": true
+      },
+      "bawgirl": {
+        "AUC": 78.91,
+        "IoU": 80.39,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "belowdarkgirl": {
+        "AUC": 71.19,
+        "IoU": 72.08,
+        "Prec": 95.48,
+        "valid": true
+      },
+      "besom3": {
+        "AUC": 63.74,
+        "IoU": 64.44,
+        "Prec": 55.93,
+        "valid": true
+      },
+      "bike": {
+        "AUC": 73.69,
+        "IoU": 74.9,
+        "Prec": 94.93,
+        "valid": true
+      },
+      "bike2left": {
+        "AUC": 81.03,
+        "IoU": 82.59,
+        "Prec": 93.39,
+        "valid": true
+      },
+      "bike2trees": {
+        "AUC": 64.19,
+        "IoU": 65.0,
+        "Prec": 71.23,
+        "valid": true
+      },
+      "bikeboy": {
+        "AUC": 78.97,
+        "IoU": 80.54,
+        "Prec": 89.38,
+        "valid": true
+      },
+      "bikeboyintodark": {
+        "AUC": 51.82,
+        "IoU": 52.45,
+        "Prec": 52.42,
+        "valid": true
+      },
+      "bikeboyright": {
+        "AUC": 72.52,
+        "IoU": 73.74,
+        "Prec": 96.15,
+        "valid": true
+      },
+      "bikeboyturn": {
+        "AUC": 62.21,
+        "IoU": 62.71,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "bikeboyturntimes": {
+        "AUC": 85.22,
+        "IoU": 87.17,
+        "Prec": 95.06,
+        "valid": true
+      },
+      "bikeboywithumbrella": {
+        "AUC": 85.93,
+        "IoU": 87.71,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "bikefromlight": {
+        "AUC": 65.5,
+        "IoU": 66.45,
+        "Prec": 95.93,
+        "valid": true
+      },
+      "bikegoindark": {
+        "AUC": 21.34,
+        "IoU": 21.55,
+        "Prec": 28.17,
+        "valid": true
+      },
+      "bikeinrain": {
+        "AUC": 69.52,
+        "IoU": 70.56,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "biketurnright": {
+        "AUC": 5.67,
+        "IoU": 5.58,
+        "Prec": 6.87,
+        "valid": true
+      },
+      "blackboy": {
+        "AUC": 79.72,
+        "IoU": 81.38,
+        "Prec": 94.44,
+        "valid": true
+      },
+      "blackboyoncall": {
+        "AUC": 82.16,
+        "IoU": 83.8,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blackcarturn": {
+        "AUC": 72.64,
+        "IoU": 73.61,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blackdown": {
+        "AUC": 71.51,
+        "IoU": 72.67,
+        "Prec": 98.39,
+        "valid": true
+      },
+      "blackgirl": {
+        "AUC": 64.03,
+        "IoU": 65.07,
+        "Prec": 86.18,
+        "valid": true
+      },
+      "blkboy`shead": {
+        "AUC": 39.51,
+        "IoU": 40.05,
+        "Prec": 48.76,
+        "valid": true
+      },
+      "blkboyback": {
+        "AUC": 80.28,
+        "IoU": 81.71,
+        "Prec": 88.3,
+        "valid": true
+      },
+      "blkboybetweenredandwhite": {
+        "AUC": 71.03,
+        "IoU": 72.28,
+        "Prec": 91.06,
+        "valid": true
+      },
+      "blkboydown": {
+        "AUC": 45.12,
+        "IoU": 45.84,
+        "Prec": 65.85,
+        "valid": true
+      },
+      "blkboyhead": {
+        "AUC": 25.33,
+        "IoU": 25.55,
+        "Prec": 30.94,
+        "valid": true
+      },
+      "blkboylefttheNo_21": {
+        "AUC": 23.87,
+        "IoU": 24.2,
+        "Prec": 26.84,
+        "valid": true
+      },
+      "blkboystand": {
+        "AUC": 32.35,
+        "IoU": 32.53,
+        "Prec": 37.12,
+        "valid": true
+      },
+      "blkboytakesumbrella": {
+        "AUC": 83.11,
+        "IoU": 84.91,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blkcaratfrontbluebus": {
+        "AUC": 49.78,
+        "IoU": 50.17,
+        "Prec": 83.25,
+        "valid": true
+      },
+      "blkgirlumbrella": {
+        "AUC": 72.88,
+        "IoU": 74.21,
+        "Prec": 96.2,
+        "valid": true
+      },
+      "blkhairgirltakingblkbag": {
+        "AUC": 28.45,
+        "IoU": 28.87,
+        "Prec": 34.22,
+        "valid": true
+      },
+      "blkmoto2north": {
+        "AUC": 38.94,
+        "IoU": 39.77,
+        "Prec": 47.59,
+        "valid": true
+      },
+      "blkstandboy": {
+        "AUC": 83.73,
+        "IoU": 85.5,
+        "Prec": 98.95,
+        "valid": true
+      },
+      "blktribikecome": {
+        "AUC": 84.88,
+        "IoU": 86.54,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blueboy": {
+        "AUC": 83.06,
+        "IoU": 84.67,
+        "Prec": 94.24,
+        "valid": true
+      },
+      "blueboy421": {
+        "AUC": 70.37,
+        "IoU": 71.48,
+        "Prec": 90.97,
+        "valid": true
+      },
+      "bluebuscoming": {
+        "AUC": 82.99,
+        "IoU": 84.62,
+        "Prec": 99.58,
+        "valid": true
+      },
+      "bluegirlbiketurn": {
+        "AUC": 49.18,
+        "IoU": 49.9,
+        "Prec": 65.32,
+        "valid": true
+      },
+      "bottlebetweenboy`sfeet": {
+        "AUC": 7.94,
+        "IoU": 7.8,
+        "Prec": 8.89,
+        "valid": true
+      },
+      "boy2basketballground": {
+        "AUC": 53.81,
+        "IoU": 54.38,
+        "Prec": 82.52,
+        "valid": true
+      },
+      "boy2buildings": {
+        "AUC": 57.14,
+        "IoU": 58.02,
+        "Prec": 74.55,
+        "valid": true
+      },
+      "boy2trees": {
+        "AUC": 77.34,
+        "IoU": 78.81,
+        "Prec": 95.07,
+        "valid": true
+      },
+      "boy2treesfindbike": {
+        "AUC": 55.53,
+        "IoU": 56.17,
+        "Prec": 72.95,
+        "valid": true
+      },
+      "boy`headwithouthat": {
+        "AUC": 25.37,
+        "IoU": 25.67,
+        "Prec": 35.96,
+        "valid": true
+      },
+      "boy`sheadingreycol": {
+        "AUC": 5.2,
+        "IoU": 5.29,
+        "Prec": 8.92,
+        "valid": true
+      },
+      "boyaftertree": {
+        "AUC": 71.8,
+        "IoU": 73.18,
+        "Prec": 87.25,
+        "valid": true
+      },
+      "boyaroundtrees": {
+        "AUC": 58.97,
+        "IoU": 60.17,
+        "Prec": 77.16,
+        "valid": true
+      },
+      "boyatdoorturnright": {
+        "AUC": 28.01,
+        "IoU": 28.22,
+        "Prec": 34.82,
+        "valid": true
+      },
+      "boydownplatform": {
+        "AUC": 62.9,
+        "IoU": 64.03,
+        "Prec": 76.7,
+        "valid": true
+      },
+      "boyfromdark": {
+        "AUC": 83.49,
+        "IoU": 85.42,
+        "Prec": 98.95,
+        "valid": true
+      },
+      "boyinlight": {
+        "AUC": 68.14,
+        "IoU": 69.25,
+        "Prec": 95.92,
+        "valid": true
+      },
+      "boyinplatform": {
+        "AUC": 62.76,
+        "IoU": 63.42,
+        "Prec": 92.21,
+        "valid": true
+      },
+      "boyinsnowfield3": {
+        "AUC": 81.78,
+        "IoU": 83.34,
+        "Prec": 92.88,
+        "valid": true
+      },
+      "boyleftblkrunning2crowd": {
+        "AUC": 50.23,
+        "IoU": 50.91,
+        "Prec": 77.93,
+        "valid": true
+      },
+      "boylefttheNo_9boy": {
+        "AUC": 76.64,
+        "IoU": 78.1,
+        "Prec": 82.69,
+        "valid": true
+      },
+      "boyoncall": {
+        "AUC": 82.21,
+        "IoU": 84.09,
+        "Prec": 86.45,
+        "valid": true
+      },
+      "boyplayphone": {
+        "AUC": 58.91,
+        "IoU": 59.97,
+        "Prec": 79.13,
+        "valid": true
+      },
+      "boyride2path": {
+        "AUC": 28.62,
+        "IoU": 28.6,
+        "Prec": 42.17,
+        "valid": true
+      },
+      "boyruninsnow": {
+        "AUC": 90.27,
+        "IoU": 92.4,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "boyscomeleft": {
+        "AUC": 37.41,
+        "IoU": 37.71,
+        "Prec": 45.69,
+        "valid": true
+      },
+      "boyshead9684": {
+        "AUC": 70.01,
+        "IoU": 71.1,
+        "Prec": 86.82,
+        "valid": true
+      },
+      "boyss": {
+        "AUC": 52.36,
+        "IoU": 52.41,
+        "Prec": 80.53,
+        "valid": true
+      },
+      "boytakingbasketballfollowing": {
+        "AUC": 34.48,
+        "IoU": 34.91,
+        "Prec": 41.41,
+        "valid": true
+      }
+    },
+    "valid_count": 100,
+    "total_count": 100,
+    "Composite": 63.51
+  },
+  "D2-gauss": {
+    "SR": 53.87,
+    "OP50": 66.53,
+    "OP75": 44.77,
+    "MeanIoU": 54.83,
+    "PR": 68.18,
+    "NPR": 64.54,
+    "seq_metrics": {
+      "10runone": {
+        "AUC": 77.87,
+        "IoU": 79.33,
+        "Prec": 98.03,
+        "valid": true
+      },
+      "11leftboy": {
+        "AUC": 82.46,
+        "IoU": 84.2,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "11runtwo": {
+        "AUC": 66.21,
+        "IoU": 67.37,
+        "Prec": 83.39,
+        "valid": true
+      },
+      "1blackteacher": {
+        "AUC": 16.97,
+        "IoU": 17.29,
+        "Prec": 19.27,
+        "valid": true
+      },
+      "1boycoming": {
+        "AUC": 75.83,
+        "IoU": 77.34,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "1stcol4thboy": {
+        "AUC": 6.9,
+        "IoU": 6.89,
+        "Prec": 11.34,
+        "valid": true
+      },
+      "1strowleftboyturning": {
+        "AUC": 4.93,
+        "IoU": 4.94,
+        "Prec": 6.15,
+        "valid": true
+      },
+      "1strowrightdrillmaster": {
+        "AUC": 58.27,
+        "IoU": 58.88,
+        "Prec": 98.17,
+        "valid": true
+      },
+      "1strowrightgirl3540": {
+        "AUC": 33.66,
+        "IoU": 34.13,
+        "Prec": 41.1,
+        "valid": true
+      },
+      "2girl": {
+        "AUC": 74.45,
+        "IoU": 75.51,
+        "Prec": 99.1,
+        "valid": true
+      },
+      "2girlup": {
+        "AUC": 5.72,
+        "IoU": 5.84,
+        "Prec": 8.82,
+        "valid": true
+      },
+      "2runseven": {
+        "AUC": 79.79,
+        "IoU": 81.19,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "3bike1": {
+        "AUC": 68.95,
+        "IoU": 69.91,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "3men": {
+        "AUC": 74.72,
+        "IoU": 75.98,
+        "Prec": 97.79,
+        "valid": true
+      },
+      "3pinkleft": {
+        "AUC": 72.2,
+        "IoU": 75.33,
+        "Prec": 91.03,
+        "valid": true
+      },
+      "3rdfatboy": {
+        "AUC": 17.87,
+        "IoU": 18.14,
+        "Prec": 25.38,
+        "valid": true
+      },
+      "3rdgrouplastboy": {
+        "AUC": 41.95,
+        "IoU": 42.38,
+        "Prec": 65.62,
+        "valid": true
+      },
+      "3thmoto": {
+        "AUC": 77.15,
+        "IoU": 78.47,
+        "Prec": 86.54,
+        "valid": true
+      },
+      "4men": {
+        "AUC": 16.87,
+        "IoU": 17.03,
+        "Prec": 25.12,
+        "valid": true
+      },
+      "4thboywithwhite": {
+        "AUC": 43.66,
+        "IoU": 44.36,
+        "Prec": 56.19,
+        "valid": true
+      },
+      "7rightorangegirl": {
+        "AUC": 31.23,
+        "IoU": 31.83,
+        "Prec": 39.22,
+        "valid": true
+      },
+      "AQgirlwalkinrain": {
+        "AUC": 38.26,
+        "IoU": 38.68,
+        "Prec": 57.8,
+        "valid": true
+      },
+      "AQtruck2north": {
+        "AUC": 82.91,
+        "IoU": 84.73,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "ab_bikeoccluded": {
+        "AUC": 34.51,
+        "IoU": 39.52,
+        "Prec": 45.89,
+        "valid": true
+      },
+      "ab_blkskirtgirl": {
+        "AUC": 65.22,
+        "IoU": 66.36,
+        "Prec": 84.02,
+        "valid": true
+      },
+      "ab_bolstershaking": {
+        "AUC": 52.97,
+        "IoU": 53.19,
+        "Prec": 59.19,
+        "valid": true
+      },
+      "ab_girlchoosesbike": {
+        "AUC": 73.97,
+        "IoU": 75.18,
+        "Prec": 99.57,
+        "valid": true
+      },
+      "ab_girlcrossroad": {
+        "AUC": 59.33,
+        "IoU": 65.72,
+        "Prec": 79.9,
+        "valid": true
+      },
+      "ab_pingpongball2": {
+        "AUC": 4.2,
+        "IoU": 4.14,
+        "Prec": 5.67,
+        "valid": true
+      },
+      "ab_rightlowerredcup_quezhen": {
+        "AUC": 21.1,
+        "IoU": 20.63,
+        "Prec": 19.1,
+        "valid": true
+      },
+      "ab_whiteboywithbluebag": {
+        "AUC": 26.4,
+        "IoU": 27.32,
+        "Prec": 27.03,
+        "valid": true
+      },
+      "baggirl": {
+        "AUC": 71.86,
+        "IoU": 73.01,
+        "Prec": 87.39,
+        "valid": true
+      },
+      "ballshootatthebasket3times": {
+        "AUC": 36.87,
+        "IoU": 37.68,
+        "Prec": 51.5,
+        "valid": true
+      },
+      "basketball849": {
+        "AUC": 2.65,
+        "IoU": 2.67,
+        "Prec": 3.06,
+        "valid": true
+      },
+      "basketballathand": {
+        "AUC": 12.35,
+        "IoU": 11.48,
+        "Prec": 14.06,
+        "valid": true
+      },
+      "basketboy": {
+        "AUC": 66.67,
+        "IoU": 67.85,
+        "Prec": 98.82,
+        "valid": true
+      },
+      "bawgirl": {
+        "AUC": 78.59,
+        "IoU": 80.06,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "belowdarkgirl": {
+        "AUC": 67.34,
+        "IoU": 68.38,
+        "Prec": 88.44,
+        "valid": true
+      },
+      "besom3": {
+        "AUC": 62.1,
+        "IoU": 62.69,
+        "Prec": 44.64,
+        "valid": true
+      },
+      "bike": {
+        "AUC": 72.42,
+        "IoU": 73.47,
+        "Prec": 98.16,
+        "valid": true
+      },
+      "bike2left": {
+        "AUC": 80.16,
+        "IoU": 81.55,
+        "Prec": 91.83,
+        "valid": true
+      },
+      "bike2trees": {
+        "AUC": 62.46,
+        "IoU": 62.95,
+        "Prec": 69.18,
+        "valid": true
+      },
+      "bikeboy": {
+        "AUC": 72.4,
+        "IoU": 73.74,
+        "Prec": 85.84,
+        "valid": true
+      },
+      "bikeboyintodark": {
+        "AUC": 30.59,
+        "IoU": 30.64,
+        "Prec": 21.91,
+        "valid": true
+      },
+      "bikeboyright": {
+        "AUC": 74.49,
+        "IoU": 75.8,
+        "Prec": 98.07,
+        "valid": true
+      },
+      "bikeboyturn": {
+        "AUC": 63.38,
+        "IoU": 63.93,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "bikeboyturntimes": {
+        "AUC": 86.56,
+        "IoU": 88.48,
+        "Prec": 97.12,
+        "valid": true
+      },
+      "bikeboywithumbrella": {
+        "AUC": 85.32,
+        "IoU": 87.14,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "bikefromlight": {
+        "AUC": 66.75,
+        "IoU": 67.81,
+        "Prec": 99.42,
+        "valid": true
+      },
+      "bikegoindark": {
+        "AUC": 23.64,
+        "IoU": 23.77,
+        "Prec": 30.99,
+        "valid": true
+      },
+      "bikeinrain": {
+        "AUC": 70.41,
+        "IoU": 71.45,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "biketurnright": {
+        "AUC": 5.49,
+        "IoU": 5.42,
+        "Prec": 6.87,
+        "valid": true
+      },
+      "blackboy": {
+        "AUC": 83.39,
+        "IoU": 85.11,
+        "Prec": 97.22,
+        "valid": true
+      },
+      "blackboyoncall": {
+        "AUC": 81.05,
+        "IoU": 82.59,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blackcarturn": {
+        "AUC": 72.86,
+        "IoU": 74.09,
+        "Prec": 99.21,
+        "valid": true
+      },
+      "blackdown": {
+        "AUC": 13.29,
+        "IoU": 13.41,
+        "Prec": 17.74,
+        "valid": true
+      },
+      "blackgirl": {
+        "AUC": 68.22,
+        "IoU": 69.3,
+        "Prec": 90.32,
+        "valid": true
+      },
+      "blkboy`shead": {
+        "AUC": 26.48,
+        "IoU": 26.7,
+        "Prec": 32.37,
+        "valid": true
+      },
+      "blkboyback": {
+        "AUC": 75.44,
+        "IoU": 76.63,
+        "Prec": 76.61,
+        "valid": true
+      },
+      "blkboybetweenredandwhite": {
+        "AUC": 61.38,
+        "IoU": 62.32,
+        "Prec": 74.17,
+        "valid": true
+      },
+      "blkboydown": {
+        "AUC": 11.03,
+        "IoU": 11.32,
+        "Prec": 14.63,
+        "valid": true
+      },
+      "blkboyhead": {
+        "AUC": 17.54,
+        "IoU": 17.63,
+        "Prec": 20.86,
+        "valid": true
+      },
+      "blkboylefttheNo_21": {
+        "AUC": 15.95,
+        "IoU": 16.21,
+        "Prec": 18.4,
+        "valid": true
+      },
+      "blkboystand": {
+        "AUC": 31.65,
+        "IoU": 31.92,
+        "Prec": 35.52,
+        "valid": true
+      },
+      "blkboytakesumbrella": {
+        "AUC": 83.49,
+        "IoU": 85.16,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blkcaratfrontbluebus": {
+        "AUC": 64.14,
+        "IoU": 64.83,
+        "Prec": 99.21,
+        "valid": true
+      },
+      "blkgirlumbrella": {
+        "AUC": 74.3,
+        "IoU": 75.56,
+        "Prec": 98.54,
+        "valid": true
+      },
+      "blkhairgirltakingblkbag": {
+        "AUC": 35.76,
+        "IoU": 36.21,
+        "Prec": 39.54,
+        "valid": true
+      },
+      "blkmoto2north": {
+        "AUC": 61.09,
+        "IoU": 61.82,
+        "Prec": 84.49,
+        "valid": true
+      },
+      "blkstandboy": {
+        "AUC": 82.91,
+        "IoU": 84.39,
+        "Prec": 98.95,
+        "valid": true
+      },
+      "blktribikecome": {
+        "AUC": 80.15,
+        "IoU": 81.74,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blueboy": {
+        "AUC": 83.95,
+        "IoU": 85.6,
+        "Prec": 95.76,
+        "valid": true
+      },
+      "blueboy421": {
+        "AUC": 68.97,
+        "IoU": 70.17,
+        "Prec": 89.07,
+        "valid": true
+      },
+      "bluebuscoming": {
+        "AUC": 82.65,
+        "IoU": 84.29,
+        "Prec": 99.44,
+        "valid": true
+      },
+      "bluegirlbiketurn": {
+        "AUC": 52.6,
+        "IoU": 53.28,
+        "Prec": 69.37,
+        "valid": true
+      },
+      "bottlebetweenboy`sfeet": {
+        "AUC": 7.28,
+        "IoU": 7.16,
+        "Prec": 8.1,
+        "valid": true
+      },
+      "boy2basketballground": {
+        "AUC": 50.12,
+        "IoU": 50.73,
+        "Prec": 80.1,
+        "valid": true
+      },
+      "boy2buildings": {
+        "AUC": 55.17,
+        "IoU": 56.05,
+        "Prec": 73.27,
+        "valid": true
+      },
+      "boy2trees": {
+        "AUC": 75.44,
+        "IoU": 76.83,
+        "Prec": 94.09,
+        "valid": true
+      },
+      "boy2treesfindbike": {
+        "AUC": 54.92,
+        "IoU": 55.57,
+        "Prec": 71.56,
+        "valid": true
+      },
+      "boy`headwithouthat": {
+        "AUC": 22.05,
+        "IoU": 22.18,
+        "Prec": 32.78,
+        "valid": true
+      },
+      "boy`sheadingreycol": {
+        "AUC": 9.95,
+        "IoU": 9.88,
+        "Prec": 15.61,
+        "valid": true
+      },
+      "boyaftertree": {
+        "AUC": 69.89,
+        "IoU": 70.94,
+        "Prec": 88.24,
+        "valid": true
+      },
+      "boyaroundtrees": {
+        "AUC": 61.2,
+        "IoU": 62.45,
+        "Prec": 81.13,
+        "valid": true
+      },
+      "boyatdoorturnright": {
+        "AUC": 29.07,
+        "IoU": 29.33,
+        "Prec": 34.21,
+        "valid": true
+      },
+      "boydownplatform": {
+        "AUC": 73.68,
+        "IoU": 74.85,
+        "Prec": 91.21,
+        "valid": true
+      },
+      "boyfromdark": {
+        "AUC": 83.27,
+        "IoU": 85.37,
+        "Prec": 98.95,
+        "valid": true
+      },
+      "boyinlight": {
+        "AUC": 71.47,
+        "IoU": 72.65,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "boyinplatform": {
+        "AUC": 63.94,
+        "IoU": 64.81,
+        "Prec": 90.15,
+        "valid": true
+      },
+      "boyinsnowfield3": {
+        "AUC": 80.67,
+        "IoU": 82.18,
+        "Prec": 90.06,
+        "valid": true
+      },
+      "boyleftblkrunning2crowd": {
+        "AUC": 54.68,
+        "IoU": 55.38,
+        "Prec": 79.34,
+        "valid": true
+      },
+      "boylefttheNo_9boy": {
+        "AUC": 72.87,
+        "IoU": 74.25,
+        "Prec": 77.97,
+        "valid": true
+      },
+      "boyoncall": {
+        "AUC": 80.91,
+        "IoU": 82.79,
+        "Prec": 82.58,
+        "valid": true
+      },
+      "boyplayphone": {
+        "AUC": 63.61,
+        "IoU": 64.58,
+        "Prec": 85.09,
+        "valid": true
+      },
+      "boyride2path": {
+        "AUC": 34.77,
+        "IoU": 34.86,
+        "Prec": 53.59,
+        "valid": true
+      },
+      "boyruninsnow": {
+        "AUC": 90.24,
+        "IoU": 92.06,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "boyscomeleft": {
+        "AUC": 39.75,
+        "IoU": 40.12,
+        "Prec": 48.06,
+        "valid": true
+      },
+      "boyshead9684": {
+        "AUC": 66.53,
+        "IoU": 67.52,
+        "Prec": 83.12,
+        "valid": true
+      },
+      "boyss": {
+        "AUC": 41.17,
+        "IoU": 41.31,
+        "Prec": 57.87,
+        "valid": true
+      },
+      "boytakingbasketballfollowing": {
+        "AUC": 27.13,
+        "IoU": 27.48,
+        "Prec": 31.42,
+        "valid": true
+      }
+    },
+    "valid_count": 100,
+    "total_count": 100,
+    "Composite": 61.09
+  },
+  "D3-agate": {
+    "SR": 55.95,
+    "OP50": 68.96,
+    "OP75": 47.27,
+    "MeanIoU": 56.99,
+    "PR": 70.6,
+    "NPR": 66.73,
+    "seq_metrics": {
+      "10runone": {
+        "AUC": 79.95,
+        "IoU": 81.53,
+        "Prec": 99.34,
+        "valid": true
+      },
+      "11leftboy": {
+        "AUC": 82.74,
+        "IoU": 84.36,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "11runtwo": {
+        "AUC": 64.76,
+        "IoU": 65.68,
+        "Prec": 80.34,
+        "valid": true
+      },
+      "1blackteacher": {
+        "AUC": 19.39,
+        "IoU": 19.85,
+        "Prec": 22.09,
+        "valid": true
+      },
+      "1boycoming": {
+        "AUC": 80.27,
+        "IoU": 81.7,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "1stcol4thboy": {
+        "AUC": 8.16,
+        "IoU": 8.2,
+        "Prec": 11.13,
+        "valid": true
+      },
+      "1strowleftboyturning": {
+        "AUC": 7.44,
+        "IoU": 7.45,
+        "Prec": 9.84,
+        "valid": true
+      },
+      "1strowrightdrillmaster": {
+        "AUC": 60.87,
+        "IoU": 61.59,
+        "Prec": 98.51,
+        "valid": true
+      },
+      "1strowrightgirl3540": {
+        "AUC": 28.85,
+        "IoU": 29.13,
+        "Prec": 36.72,
+        "valid": true
+      },
+      "2girl": {
+        "AUC": 73.57,
+        "IoU": 74.62,
+        "Prec": 98.65,
+        "valid": true
+      },
+      "2girlup": {
+        "AUC": 5.06,
+        "IoU": 5.08,
+        "Prec": 8.82,
+        "valid": true
+      },
+      "2runseven": {
+        "AUC": 79.31,
+        "IoU": 80.66,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "3bike1": {
+        "AUC": 67.72,
+        "IoU": 68.61,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "3men": {
+        "AUC": 71.95,
+        "IoU": 73.12,
+        "Prec": 89.5,
+        "valid": true
+      },
+      "3pinkleft": {
+        "AUC": 69.43,
+        "IoU": 72.35,
+        "Prec": 91.88,
+        "valid": true
+      },
+      "3rdfatboy": {
+        "AUC": 14.27,
+        "IoU": 14.45,
+        "Prec": 19.64,
+        "valid": true
+      },
+      "3rdgrouplastboy": {
+        "AUC": 41.52,
+        "IoU": 41.96,
+        "Prec": 65.5,
+        "valid": true
+      },
+      "3thmoto": {
+        "AUC": 77.24,
+        "IoU": 78.59,
+        "Prec": 86.54,
+        "valid": true
+      },
+      "4men": {
+        "AUC": 59.12,
+        "IoU": 60.05,
+        "Prec": 81.4,
+        "valid": true
+      },
+      "4thboywithwhite": {
+        "AUC": 49.75,
+        "IoU": 50.41,
+        "Prec": 63.17,
+        "valid": true
+      },
+      "7rightorangegirl": {
+        "AUC": 33.5,
+        "IoU": 34.15,
+        "Prec": 42.3,
+        "valid": true
+      },
+      "AQgirlwalkinrain": {
+        "AUC": 43.65,
+        "IoU": 44.13,
+        "Prec": 63.17,
+        "valid": true
+      },
+      "AQtruck2north": {
+        "AUC": 82.06,
+        "IoU": 83.68,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "ab_bikeoccluded": {
+        "AUC": 67.14,
+        "IoU": 77.14,
+        "Prec": 86.69,
+        "valid": true
+      },
+      "ab_blkskirtgirl": {
+        "AUC": 66.67,
+        "IoU": 67.75,
+        "Prec": 85.04,
+        "valid": true
+      },
+      "ab_bolstershaking": {
+        "AUC": 50.92,
+        "IoU": 50.96,
+        "Prec": 54.7,
+        "valid": true
+      },
+      "ab_girlchoosesbike": {
+        "AUC": 72.26,
+        "IoU": 73.31,
+        "Prec": 99.57,
+        "valid": true
+      },
+      "ab_girlcrossroad": {
+        "AUC": 52.0,
+        "IoU": 57.51,
+        "Prec": 74.74,
+        "valid": true
+      },
+      "ab_pingpongball2": {
+        "AUC": 3.71,
+        "IoU": 3.76,
+        "Prec": 5.67,
+        "valid": true
+      },
+      "ab_rightlowerredcup_quezhen": {
+        "AUC": 25.48,
+        "IoU": 25.04,
+        "Prec": 24.53,
+        "valid": true
+      },
+      "ab_whiteboywithbluebag": {
+        "AUC": 27.18,
+        "IoU": 28.23,
+        "Prec": 29.92,
+        "valid": true
+      },
+      "baggirl": {
+        "AUC": 71.56,
+        "IoU": 72.79,
+        "Prec": 90.99,
+        "valid": true
+      },
+      "ballshootatthebasket3times": {
+        "AUC": 39.36,
+        "IoU": 40.14,
+        "Prec": 55.75,
+        "valid": true
+      },
+      "basketball849": {
+        "AUC": 2.38,
+        "IoU": 2.48,
+        "Prec": 2.94,
+        "valid": true
+      },
+      "basketballathand": {
+        "AUC": 22.47,
+        "IoU": 21.94,
+        "Prec": 26.56,
+        "valid": true
+      },
+      "basketboy": {
+        "AUC": 68.57,
+        "IoU": 69.5,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "bawgirl": {
+        "AUC": 80.15,
+        "IoU": 81.58,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "belowdarkgirl": {
+        "AUC": 68.13,
+        "IoU": 69.47,
+        "Prec": 90.95,
+        "valid": true
+      },
+      "besom3": {
+        "AUC": 62.87,
+        "IoU": 63.57,
+        "Prec": 45.87,
+        "valid": true
+      },
+      "bike": {
+        "AUC": 74.86,
+        "IoU": 76.25,
+        "Prec": 98.46,
+        "valid": true
+      },
+      "bike2left": {
+        "AUC": 79.62,
+        "IoU": 81.17,
+        "Prec": 92.61,
+        "valid": true
+      },
+      "bike2trees": {
+        "AUC": 66.01,
+        "IoU": 66.63,
+        "Prec": 73.29,
+        "valid": true
+      },
+      "bikeboy": {
+        "AUC": 75.35,
+        "IoU": 76.66,
+        "Prec": 89.38,
+        "valid": true
+      },
+      "bikeboyintodark": {
+        "AUC": 39.71,
+        "IoU": 40.02,
+        "Prec": 32.81,
+        "valid": true
+      },
+      "bikeboyright": {
+        "AUC": 74.19,
+        "IoU": 75.5,
+        "Prec": 98.29,
+        "valid": true
+      },
+      "bikeboyturn": {
+        "AUC": 64.06,
+        "IoU": 64.59,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "bikeboyturntimes": {
+        "AUC": 86.36,
+        "IoU": 88.31,
+        "Prec": 96.3,
+        "valid": true
+      },
+      "bikeboywithumbrella": {
+        "AUC": 84.83,
+        "IoU": 86.48,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "bikefromlight": {
+        "AUC": 11.21,
+        "IoU": 11.36,
+        "Prec": 16.86,
+        "valid": true
+      },
+      "bikegoindark": {
+        "AUC": 22.64,
+        "IoU": 22.8,
+        "Prec": 28.52,
+        "valid": true
+      },
+      "bikeinrain": {
+        "AUC": 72.62,
+        "IoU": 73.87,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "biketurnright": {
+        "AUC": 6.0,
+        "IoU": 5.87,
+        "Prec": 7.63,
+        "valid": true
+      },
+      "blackboy": {
+        "AUC": 81.56,
+        "IoU": 83.01,
+        "Prec": 97.92,
+        "valid": true
+      },
+      "blackboyoncall": {
+        "AUC": 83.26,
+        "IoU": 84.81,
+        "Prec": 99.66,
+        "valid": true
+      },
+      "blackcarturn": {
+        "AUC": 71.96,
+        "IoU": 73.11,
+        "Prec": 99.21,
+        "valid": true
+      },
+      "blackdown": {
+        "AUC": 72.43,
+        "IoU": 73.51,
+        "Prec": 98.39,
+        "valid": true
+      },
+      "blackgirl": {
+        "AUC": 63.75,
+        "IoU": 64.77,
+        "Prec": 84.79,
+        "valid": true
+      },
+      "blkboy`shead": {
+        "AUC": 34.76,
+        "IoU": 35.16,
+        "Prec": 43.06,
+        "valid": true
+      },
+      "blkboyback": {
+        "AUC": 75.83,
+        "IoU": 77.06,
+        "Prec": 77.78,
+        "valid": true
+      },
+      "blkboybetweenredandwhite": {
+        "AUC": 59.48,
+        "IoU": 60.3,
+        "Prec": 76.82,
+        "valid": true
+      },
+      "blkboydown": {
+        "AUC": 7.49,
+        "IoU": 7.55,
+        "Prec": 10.98,
+        "valid": true
+      },
+      "blkboyhead": {
+        "AUC": 44.06,
+        "IoU": 44.67,
+        "Prec": 53.06,
+        "valid": true
+      },
+      "blkboylefttheNo_21": {
+        "AUC": 28.04,
+        "IoU": 28.45,
+        "Prec": 32.35,
+        "valid": true
+      },
+      "blkboystand": {
+        "AUC": 32.22,
+        "IoU": 32.44,
+        "Prec": 38.16,
+        "valid": true
+      },
+      "blkboytakesumbrella": {
+        "AUC": 81.95,
+        "IoU": 83.55,
+        "Prec": 97.94,
+        "valid": true
+      },
+      "blkcaratfrontbluebus": {
+        "AUC": 52.98,
+        "IoU": 53.42,
+        "Prec": 84.16,
+        "valid": true
+      },
+      "blkgirlumbrella": {
+        "AUC": 74.34,
+        "IoU": 75.62,
+        "Prec": 98.83,
+        "valid": true
+      },
+      "blkhairgirltakingblkbag": {
+        "AUC": 31.43,
+        "IoU": 32.02,
+        "Prec": 37.94,
+        "valid": true
+      },
+      "blkmoto2north": {
+        "AUC": 63.69,
+        "IoU": 64.71,
+        "Prec": 85.03,
+        "valid": true
+      },
+      "blkstandboy": {
+        "AUC": 82.03,
+        "IoU": 83.56,
+        "Prec": 98.42,
+        "valid": true
+      },
+      "blktribikecome": {
+        "AUC": 83.87,
+        "IoU": 85.68,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "blueboy": {
+        "AUC": 84.46,
+        "IoU": 86.14,
+        "Prec": 96.97,
+        "valid": true
+      },
+      "blueboy421": {
+        "AUC": 68.49,
+        "IoU": 69.67,
+        "Prec": 89.31,
+        "valid": true
+      },
+      "bluebuscoming": {
+        "AUC": 83.12,
+        "IoU": 84.84,
+        "Prec": 99.44,
+        "valid": true
+      },
+      "bluegirlbiketurn": {
+        "AUC": 47.96,
+        "IoU": 48.63,
+        "Prec": 63.96,
+        "valid": true
+      },
+      "bottlebetweenboy`sfeet": {
+        "AUC": 6.69,
+        "IoU": 6.47,
+        "Prec": 7.51,
+        "valid": true
+      },
+      "boy2basketballground": {
+        "AUC": 50.83,
+        "IoU": 51.48,
+        "Prec": 79.61,
+        "valid": true
+      },
+      "boy2buildings": {
+        "AUC": 52.64,
+        "IoU": 53.45,
+        "Prec": 69.07,
+        "valid": true
+      },
+      "boy2trees": {
+        "AUC": 78.49,
+        "IoU": 79.86,
+        "Prec": 97.54,
+        "valid": true
+      },
+      "boy2treesfindbike": {
+        "AUC": 54.24,
+        "IoU": 54.92,
+        "Prec": 70.18,
+        "valid": true
+      },
+      "boy`headwithouthat": {
+        "AUC": 28.03,
+        "IoU": 28.33,
+        "Prec": 39.72,
+        "valid": true
+      },
+      "boy`sheadingreycol": {
+        "AUC": 5.54,
+        "IoU": 5.51,
+        "Prec": 13.01,
+        "valid": true
+      },
+      "boyaftertree": {
+        "AUC": 73.39,
+        "IoU": 74.82,
+        "Prec": 91.18,
+        "valid": true
+      },
+      "boyaroundtrees": {
+        "AUC": 63.22,
+        "IoU": 64.44,
+        "Prec": 81.49,
+        "valid": true
+      },
+      "boyatdoorturnright": {
+        "AUC": 58.66,
+        "IoU": 59.45,
+        "Prec": 67.61,
+        "valid": true
+      },
+      "boydownplatform": {
+        "AUC": 75.29,
+        "IoU": 76.54,
+        "Prec": 95.07,
+        "valid": true
+      },
+      "boyfromdark": {
+        "AUC": 83.04,
+        "IoU": 85.08,
+        "Prec": 98.95,
+        "valid": true
+      },
+      "boyinlight": {
+        "AUC": 71.89,
+        "IoU": 72.97,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "boyinplatform": {
+        "AUC": 66.57,
+        "IoU": 67.5,
+        "Prec": 92.1,
+        "valid": true
+      },
+      "boyinsnowfield3": {
+        "AUC": 81.12,
+        "IoU": 82.66,
+        "Prec": 93.3,
+        "valid": true
+      },
+      "boyleftblkrunning2crowd": {
+        "AUC": 55.16,
+        "IoU": 56.0,
+        "Prec": 80.05,
+        "valid": true
+      },
+      "boylefttheNo_9boy": {
+        "AUC": 76.03,
+        "IoU": 77.48,
+        "Prec": 82.38,
+        "valid": true
+      },
+      "boyoncall": {
+        "AUC": 77.28,
+        "IoU": 78.9,
+        "Prec": 64.19,
+        "valid": true
+      },
+      "boyplayphone": {
+        "AUC": 58.28,
+        "IoU": 59.2,
+        "Prec": 80.73,
+        "valid": true
+      },
+      "boyride2path": {
+        "AUC": 32.53,
+        "IoU": 32.62,
+        "Prec": 47.17,
+        "valid": true
+      },
+      "boyruninsnow": {
+        "AUC": 89.67,
+        "IoU": 91.58,
+        "Prec": 100.0,
+        "valid": true
+      },
+      "boyscomeleft": {
+        "AUC": 64.56,
+        "IoU": 65.51,
+        "Prec": 83.62,
+        "valid": true
+      },
+      "boyshead9684": {
+        "AUC": 69.71,
+        "IoU": 70.8,
+        "Prec": 87.72,
+        "valid": true
+      },
+      "boyss": {
+        "AUC": 41.54,
+        "IoU": 41.91,
+        "Prec": 60.53,
+        "valid": true
+      },
+      "boytakingbasketballfollowing": {
+        "AUC": 32.24,
+        "IoU": 32.67,
+        "Prec": 36.8,
+        "valid": true
+      }
+    },
+    "valid_count": 100,
+    "total_count": 100,
+    "Composite": 63.34
+  }
+}

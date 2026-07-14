@@ -1,0 +1,22 @@
+{
+  "reference": "SOT pretrain baseline (for reference, all from single RTX 3090, bs=32)",
+  "date": "2026-06-21",
+  "config": "vitb_256_tbsi_32x1_1e4_lasher_15ep_sot (bs=32, single GPU)",
+  "paper_reference": "56.5 SR / 70.2 PR / 66.5 NPR (4 GPU, bs=128 total)",
+  "L1_Sprint": {
+    "config": "4ep x 12k smpl, bs=32, 100 seq test",
+    "SR": 54.72, "OP50": 67.31, "PR": 68.95, "NPR": 65.02,
+    "note": "20% data, 4 epochs - reaches ~97% of full performance"
+  },
+  "L2_Verify": {
+    "config": "8ep x 30k smpl, bs=32, 245 seq full test",
+    "SR": 54.80, "OP50": 66.80, "PR": 68.34, "NPR": 64.61,
+    "note": "50% data, 8 epochs - no meaningful improvement over L1"
+  },
+  "L3_Full": {
+    "config": "15ep x 60k smpl, bs=32, 245 seq full test",
+    "SR": 54.62, "OP50": 66.49, "PR": 68.17, "NPR": 64.43,
+    "note": "100% data, 15 epochs, LR@10 - matches L1 within noise"
+  },
+  "conclusion": "L1 Sprint (50min) already reaches ~95-97% of Full (6h). Use L1 for fast iteration."
+}
