@@ -7,7 +7,7 @@ export PYTHONUNBUFFERED=1
 cd /root/autodl-tmp/TBSI_gai/TBSI
 exec python tracking/train.py \
     --script tbsi_track \
-    --config vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast \
+    --config vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce \
     --save_dir ./output \
     --mode single \
-    >> output/logs/train_tbsi_track-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast.log 2>&1
+    >> output/logs/train_tbsi_track-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce.log 2>&1

@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-CONFIG="${1:-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast}"
+CONFIG="${1:-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce}"
 SCRIPT="tbsi_track"
 SAVE_DIR="./output"
 LOG_DIR="${SAVE_DIR}/logs"

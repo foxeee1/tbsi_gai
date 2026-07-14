@@ -3,13 +3,13 @@
 # TBSI Training → Testing → Analysis Pipeline
 # ============================================================================
 # Usage: bash run.sh <config_name>
-#   e.g. bash run.sh vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast
+#   e.g. bash run.sh vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce
 # ============================================================================
 set -e
 
 if [ $# -lt 1 ]; then
     echo "Usage: bash run.sh <config_name>"
-    echo "  e.g. bash run.sh vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast"
+    echo "  e.g. bash run.sh vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce"
     exit 1
 fi
 

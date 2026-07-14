@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-CONFIG="${CONFIG:-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast}"
+CONFIG="${CONFIG:-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce}"
 SCRIPT="${SCRIPT:-tbsi_track}"
 SAVE_DIR="${SAVE_DIR:-./output}"
 DATASET="${DATASET:-lasher_test}"

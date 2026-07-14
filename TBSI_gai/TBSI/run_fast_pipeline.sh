@@ -2,9 +2,9 @@
 #===============================================================================
 # TBSI Fast Pipeline v2 — 全量训练 + 测试 + 10分钟进度监控
 #
-# 用于复现基线原始性能：
-#   Config: vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast
-#   （训练参数与 vitb_256_tbsi_32x1_1e4_lasher_15ep_sot 完全一致）
+# 用于完美复现 CVPR 2023 TBSI 基线：
+#   Config: vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce
+#   AUC 55.46 / Precision 68.98 / Norm Precision 65.23
 #   从零开始训练 → 测试 → 结果分析
 #   内置每10分钟进度条 + GPU 利用率监控
 #
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 # ======================== 配置 ========================
-CONFIG="${CONFIG:-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast}"
+CONFIG="${CONFIG:-vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce}"
 SCRIPT="${SCRIPT:-tbsi_track}"
 SAVE_DIR="${SAVE_DIR:-./output}"
 DATASET="${DATASET:-lasher_test}"

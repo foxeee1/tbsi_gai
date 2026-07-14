@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # ======================== 配置 ========================
-CONFIG="vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_fast"
+CONFIG="vitb_256_tbsi_32x1_1e4_lasher_15ep_sot_reproduce"
 SCRIPT="tbsi_track"
 SAVE_DIR="./output"
 DATASET="lasher_test"
