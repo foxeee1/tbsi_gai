@@ -155,4 +155,9 @@ class TBSILayer(nn.Module):
         x_v[:, :lens_z, :] = self.ca_t2t_f2v(torch.cat([x_v[:, :lens_z, :], fused_t], dim=1))[:, :lens_z, :]
         x_i[:, :lens_z, :] = self.ca_t2t_f2i(torch.cat([x_i[:, :lens_z, :], fused_t], dim=1))[:, :lens_z, :]
 
-        return x_v, x_i
+        # Return quality signal for downstream fusion (avg confidence per modality)
+        if self.use_degradation:
+            q_global = torch.cat([conf_v.mean(dim=1), conf_i.mean(dim=1)], dim=-1)  # (B, 2)
+        else:
+            q_global = None
+        return x_v, x_i, q_global

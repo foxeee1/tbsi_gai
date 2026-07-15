@@ -1,0 +1,114 @@
+# ==============================================================================
+# TBSI MiniLasHeR 快速验证配置
+# ==============================================================================
+# 实验: vitb_256_tbsi_32x4_4e4_miniLasHeR_15ep
+# 目的: 在 MiniLasHeR (30 seq, ~22K 帧) 上快速训练测试迭代
+#       单卡 RTX 3090 训练 ~15min/epoch → 全 15 epoch ~4h
+#       修正前/后对照基准，验证模块健康度和梯度流
+# ==============================================================================
+# 📋 MiniLasHeR 数据集:
+#   序列数: 30 (完整 LasHeR: 979)
+#   总帧数: ~22,300 (完整 LasHeR: ~734K)
+#   覆盖场景: Normal(6), Illumination(6), ThermalCross(6),
+#             Occlusion(6), FastMotion(6)
+# ==============================================================================
+# 🔧 相对完美基线的修改:
+#   1. DATA.TRAIN.DATASETS_NAME: "MiniLasHeR_train" (替代 LasHeR_train)
+#   2. DATA.VAL.DATASETS_NAME: "MiniLasHeR_test" (替代 LasHeR_test)
+#   3. SAMPLE_PER_EPOCH: 60000 → 3000 (数据量缩小 25 倍)
+#   4. NUM_WORKER: 8 → 4 (小数据集不需要太多 worker)
+#   5. PREFETCH_FACTOR: 4 → 2 (减少预取)
+#   6. EPOCH: 15 (保持相同 epoch 数，但每 epoch 速度 ~25x)
+#   7. SAVE_EPOCHS: [3, 6, 9, 12] → [1, 2, 3, 5, 10, 15] (更多检查点)
+#   8. VAL_EPOCH_INTERVAL: 10 → 5 (更频繁验证)
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - MiniLasHeR_train      # 30 seq mini subset
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 3000    # 完整 LasHeR 是 60000
+  VAL:
+    DATASETS_NAME:
+      - MiniLasHeR_train      # same 30-seq subset for validation loss tracking
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 1000    # mini validation samples
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  # === 时序令牌 ===
+  TEMPORAL_TOKENS: True
+  NUM_TEMPORAL_TOKENS: 4
+  # === 融合模块 (DaFusion) ===
+  DEGRADATION_AWARE: True
+  DA_MODE: channel
+  DA_MADC: True
+  DA_CSR: True
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  TEMPORAL_LR: 0.0005
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.1
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 4              # 小数据集, 4 worker 足够
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 10         # 更频繁输出 (每 epoch ~94 iter)
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 5      # 更频繁验证
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 2         # 减少预取, 减小内存压力
+  SAVE_EPOCHS: [1, 2, 3, 5, 10, 15]  # 更多检查点便于恢复
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128

@@ -19,63 +19,126 @@ from lib.utils.box_ops import box_xyxy_to_cxcywh
 
 class DegradationAwareFusion(nn.Module):
     """
-    Lightweight Quality-Aware Fusion Module (v2 — slim).
+    Quality-Aware Fusion Module.
 
-    Design:
-      - global_quality: global modality quality ratio (1 Linear → 2 scalars after sigmoid)
-      - spatial_gate: per-pixel spatial weight (1 Conv1×1 → 2 maps after sigmoid)
-      - Final: w_rgb * feat_rgb + w_tir * feat_tir (no out-projection)
+    Core design:
+      - quality_conv: global modality quality estimation → scalar per modality
+      - spatial_gate: per-pixel spatial weight (B, 2, H, W)
+      - channel_gate: per-channel modulation (B, 2C, 1, 1)
+      - MADC: zero-param amplitude normalization on spatial weights
+      - CSR: complementary-aware channel enhancement on fused output
 
-    Removed in v2: quality_conv (replaced by global_quality), channel_gate, MADC, CSR.
-    Parameter reduction: ~42K → ~6K (-86%).
+    All sub-networks default-initialized. quality_conv and channel_gate
+    last conv layers are zero-initialized so initial fusion ≈ uniform.
     """
 
     def __init__(self, dim, reduction=16, da_mode='spatial',
                  use_madc=False, use_csr=False):
         super().__init__()
-        # Ignored in slim version (kept for API compatibility):
-        # reduction, da_mode, use_madc, use_csr
+        rdim = max(dim // reduction, 16)
+        self.da_mode = da_mode
+        self.use_madc = use_madc
+        self.use_csr = use_csr
 
-        # Global modality quality: pooled → 2 scalars per batch
-        self.global_quality = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(dim * 2, 2),
-            nn.Sigmoid(),
+        # Global modality quality (scalar per modality)
+        self.quality_conv = nn.Sequential(
+            nn.Conv2d(dim * 2, rdim, kernel_size=1, padding=0, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(rdim, 2, kernel_size=1, padding=0, bias=True),
         )
+        # Zero-init last layer: initial output ≈ 0 → sigmoid(0) ≈ 0.5 → uniform quality
+        nn.init.zeros_(self.quality_conv[-1].weight)
+        nn.init.zeros_(self.quality_conv[-1].bias)
 
-        # Spatial gate: per-pixel modality weight
+        # Spatial gate (B, 2, H, W)
         self.spatial_gate = nn.Sequential(
-            nn.Conv2d(dim * 2, 2, kernel_size=1, padding=0, bias=True),
-            nn.Sigmoid(),
+            nn.Conv2d(dim * 2, rdim, kernel_size=1, padding=0, bias=False),
+            nn.BatchNorm2d(rdim),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(rdim, 2, kernel_size=1, padding=0, bias=True),
         )
 
-        # Zero-init global_quality Linear output → initial sigmoid ≈ 0.5 → uniform quality
-        nn.init.zeros_(self.global_quality[-2].weight)
-        nn.init.zeros_(self.global_quality[-2].bias)
+        # Channel gate (B, 2C, 1, 1) — only in channel mode
+        if da_mode == 'channel':
+            self.channel_gate = nn.Sequential(
+                nn.Conv2d(dim * 2, rdim, kernel_size=1, padding=0, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(rdim, dim * 2, kernel_size=1, padding=0, bias=True),
+            )
+            # Zero-init last layer: initial channel_gate ≈ 0.5 → uniform per-channel weight
+            nn.init.zeros_(self.channel_gate[-1].weight)
+            nn.init.zeros_(self.channel_gate[-1].bias)
 
-    def forward(self, feat_rgb: torch.Tensor, feat_tir: torch.Tensor) -> torch.Tensor:
-        cat_feat = torch.cat([feat_rgb, feat_tir], dim=1)       # (B, 2C, H, W)
+        # CSR: Complementary-aware channel enhancement on fused features
+        if use_csr:
+            rdim_csr = max(dim // reduction, 16)
+            self.comp_reduce = nn.Conv2d(dim, rdim_csr, kernel_size=1, bias=True)
+            self.comp_channel = nn.Conv2d(rdim_csr, dim, kernel_size=1, bias=True)
+            # Zero-init: start from identity (channel_gate=0 → no modulation)
+            nn.init.zeros_(self.comp_channel.weight)
+            nn.init.zeros_(self.comp_channel.bias)
 
-        # Global quality ratio
-        w_global = self.global_quality(cat_feat)                 # (B, 2)
+    def forward(self, feat_rgb: torch.Tensor, feat_tir: torch.Tensor,
+                quality_hint: torch.Tensor = None) -> torch.Tensor:
+        """
+        Args:
+            quality_hint: (B, 2) optional — per-modality confidence from TBSILayer's DM.
+                          Used as prior to modulate global quality scores.
+        """
+        B, C, H, W = feat_rgb.shape
+        cat_feat = torch.cat([feat_rgb, feat_tir], dim=1)
+        pooled = cat_feat.mean(dim=[2, 3], keepdim=True)
 
-        # Per-pixel spatial gate
-        w_spatial = self.spatial_gate(cat_feat)                  # (B, 2, H, W)
+        # (1) Global quality scores
+        q = torch.sigmoid(self.quality_conv(pooled))          # (B, 2, 1, 1)
+        # Modulate with TBSILayer quality_hint if available (attention-fusion joint gating)
+        if quality_hint is not None:
+            q = q * quality_hint.unsqueeze(-1).unsqueeze(-1)  # (B, 2, 1, 1) * (B, 2, 1, 1)
+        q_rgb, q_tir = q[:, 0:1], q[:, 1:2]
 
-        # Combine: quality * spatial → per-modality weight maps
-        w_rgb = w_global[:, 0:1, None, None] * w_spatial[:, 0:1]   # (B, 1, H, W)
-        w_tir = w_global[:, 1:2, None, None] * w_spatial[:, 1:2]  # (B, 1, H, W)
+        # (2) Spatial gate
+        s = torch.sigmoid(self.spatial_gate(cat_feat))         # (B, 2, H, W)
+        s_rgb, s_tir = s[:, 0:1], s[:, 1:2]
 
-        # Weighted sum (no normalization — weights are already meaningful magnitudes)
-        return w_rgb * feat_rgb + w_tir * feat_tir
+        # (3) MADC: amplitude normalization (zero-param)
+        if self.use_madc:
+            mag_rgb = feat_rgb.abs().mean(dim=[1,2,3], keepdim=True) + 1e-6
+            mag_tir = feat_tir.abs().mean(dim=[1,2,3], keepdim=True) + 1e-6
+            alpha = 0.5
+            s_rgb = s_rgb * (1.0 / mag_rgb).pow(alpha)
+            s_tir = s_tir * (1.0 / mag_tir).pow(alpha)
+
+        # (4) Fusion weights = quality * spatial gate
+        w_rgb = s_rgb * q_rgb
+        w_tir = s_tir * q_tir
+
+        # (5) Channel-wise modulation
+        if self.da_mode == 'channel':
+            c = torch.sigmoid(self.channel_gate(pooled))
+            w_rgb = w_rgb * c[:, :C]
+            w_tir = w_tir * c[:, C:]
+
+        # (6) Normalize and fuse
+        total = w_rgb + w_tir + 1e-8
+        fused = feat_rgb * (w_rgb / total) + feat_tir * (w_tir / total)
+
+        # (7) CSR: complementary channel enhancement (residual)
+        if self.use_csr:
+            feat_diff = feat_rgb - feat_tir
+            diff_feat = F.relu(self.comp_reduce(feat_diff))
+            channel_gate = torch.tanh(self.comp_channel(diff_feat))
+            channel_gate = torch.clamp(channel_gate, -0.5, 0.5)    # stability clamp
+            fused = fused * (1.0 + 0.1 * channel_gate)
+
+        return fused
 
     def forward_gate_only(self, feat_rgb, feat_tir):
         """Plan B: lightweight spatial gate modulating base_fused."""
         cat_feat = torch.cat([feat_rgb, feat_tir], dim=1)
-        w_spatial = self.spatial_gate(cat_feat)
-        gate = (w_spatial[:, 0:1] + w_spatial[:, 1:2]) / 2.0
-        return gate
+        s = torch.sigmoid(self.spatial_gate(cat_feat))
+        # Single modulation map: average RGB/TIR gates
+        gate = (s[:, 0:1] + s[:, 1:2]) / 2.0  # (B, 1, H, W)
+        return gate  # base_fused will multiply by (1 + gate)
 
 
 
@@ -206,7 +269,9 @@ class TBSITrack(nn.Module):
                                               return_last_attn=return_last_attn,
                                               temporal_tokens=tokens_updated)
             feat_curr = x_curr[-1] if isinstance(x_curr, list) else x_curr
-            out = self.forward_head(feat_curr, None, temporal_tokens=tokens_updated)
+            quality_hint = aux_dict.get("quality_signal", None)
+            out = self.forward_head(feat_curr, None, temporal_tokens=tokens_updated,
+                                    quality_hint=quality_hint)
             out['temporal_tokens'] = tokens_updated
             out.update(aux_dict)
             out['backbone_feat'] = x_curr
@@ -221,15 +286,17 @@ class TBSITrack(nn.Module):
         feat_last = x
         if isinstance(x, list):
             feat_last = x[-1]
-        out = self.forward_head(feat_last, None, temporal_tokens=prev_tokens)
+        quality_hint = aux_dict.get("quality_signal", None)
+        out = self.forward_head(feat_last, None, temporal_tokens=prev_tokens,
+                                quality_hint=quality_hint)
 
         out.update(aux_dict)
         out['backbone_feat'] = x
         return out
 
-    def forward_fusion_only(self, cat_feature):
+    def forward_fusion_only(self, cat_feature, quality_hint=None):
         """Extract search RGB/TIR + DA fusion. Returns (B, C, H, W) fused features.
-        [Phase 1 Fix] Removed .detach() on base_fused so gradients flow through."""
+        quality_hint: (B, 2) from TBSILayer average per-modality confidence, or None."""
         B = cat_feature.shape[0]
         C = cat_feature.shape[-1]
         num_search_token = 256
@@ -251,13 +318,14 @@ class TBSITrack(nn.Module):
                 gate = self.da_fusion.forward_gate_only(feat_rgb, feat_tir)
                 return base_fused * (1.0 + gate)
             else:
-                da_fused = self.da_fusion(feat_rgb, feat_tir)
+                # Pass TBSILayer quality_hint to DaFusion for attention-fusion joint gating
+                da_fused = self.da_fusion(feat_rgb, feat_tir, quality_hint=quality_hint)
                 scale = getattr(self, 'da_fusion_scale', 0.5)
-                return base_fused + scale * da_fused  # [Fix] no .detach()
+                return base_fused + scale * da_fused
         else:
             return self.tbsi_fuse_search(opt_feat)
 
-    def forward_head(self, cat_feature, gt_score_map=None, temporal_tokens=None):
+    def forward_head(self, cat_feature, gt_score_map=None, temporal_tokens=None, quality_hint=None):
         B, L, C = cat_feature.shape
         num_search_token = 256
 
@@ -274,8 +342,8 @@ class TBSITrack(nn.Module):
                 enc_rgb, enc_tir
             ], dim=1)
 
-        # Fusion
-        fused_feat = self.forward_fusion_only(cat_feature)
+        # Fusion (with quality hint from TBSILayer for path-level gating)
+        fused_feat = self.forward_fusion_only(cat_feature, quality_hint=quality_hint)
 
         # TC3: Temporal-Conditioned Channel Calibration
         if self.use_temporal_tokens and temporal_tokens is not None:

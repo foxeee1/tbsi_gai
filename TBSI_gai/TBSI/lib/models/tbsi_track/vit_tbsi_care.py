@@ -211,18 +211,27 @@ class VisionTransformerTBSI(BaseBackbone):
         lens_x = self.pos_embed_x.shape[1]
         
         tbsi_index = 0
+        quality_signals = []
         for i, blk in enumerate(self.blocks):
             x_v = blk(x_v)
             x_i = blk(x_i)
             if self.tbsi_loc is not None and i in self.tbsi_loc:
-                x_v, x_i = self.tbsi_layers[tbsi_index](x_v, x_i, lens_z, temporal_tokens=temporal_tokens)
+                out = self.tbsi_layers[tbsi_index](x_v, x_i, lens_z, temporal_tokens=temporal_tokens)
+                if len(out) == 3:
+                    x_v, x_i, q = out
+                    if q is not None:
+                        quality_signals.append(q)
+                else:
+                    x_v, x_i = out
                 tbsi_index += 1
 
         x_v = recover_tokens(x_v, lens_z, lens_x, mode=self.cat_mode)
         x_i = recover_tokens(x_i, lens_z, lens_x, mode=self.cat_mode)
         x = torch.cat([x_v, x_i], dim=1)
-        
+
         aux_dict = {"attn": None}
+        if quality_signals:
+            aux_dict["quality_signal"] = torch.stack(quality_signals, dim=1).mean(dim=1)
         return self.norm(x), aux_dict
 
     def init_weights(self, mode=''):
