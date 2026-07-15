@@ -152,8 +152,10 @@ class Attention_st(nn.Module):
             trunc_normal_(self.relative_position_bias_table, std=0.02)
 
     def forward(self, x, mask=None, return_attention=False, quality_mask=None):
-        """qaulity_mask: (B, N_search, 1) — per-search-token confidence in [0,1].
-        Applied as post-softmax multiplier to suppress cross-attn from/to degraded tokens."""
+        """quality_mask: (B, N_search, 1) — per-search-token confidence in [0,1].
+        [Phase 1 Fix] Applied as PRE-softmax logit bias (instead of post-softmax multiply).
+        Principle: attention gates should operate in logit space, not probability space.
+        """
         B, N, C = x.shape
 
         lens_z = 64  # Number of template tokens
@@ -184,17 +186,19 @@ class Attention_st(nn.Module):
         if mask is not None:
             attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2), float('-inf'),)
 
-        attn = attn.softmax(dim=-1)
-
-        # Quality mask: suppress attention to/from degraded search tokens
-        # Note: Attention_st does NOT split into heads. attn shape = (B, Lq, Lk)
+        # [Phase 1 Fix] Quality mask: convert [0,1] confidence → logit bias (pre-softmax)
+        # BEFORE: attn = softmax(attn) * quality_mask (post-softmax multiply — distorts distribution)
+        # AFTER:  attn = softmax(attn + log(quality_mask)) (pre-softmax bias — correct logit space)
         if quality_mask is not None:
             if self.mode in ('s2t', 't2t'):
                 qm = quality_mask.squeeze(-1).unsqueeze(1)  # (B, 1, 256)
-                attn = attn * qm
+                qm_bias = torch.log(qm.clamp(min=1e-6))     # inverse sigmoid → logit
+                attn = attn + qm_bias
             elif self.mode == 't2s':
-                attn = attn * quality_mask  # (B, 256, 64) * (B, 256, 1)
-            attn = attn / (attn.sum(dim=-1, keepdim=True) + 1e-8)
+                qm_bias = torch.log(quality_mask.clamp(min=1e-6))  # (B, 256, 1)
+                attn = attn + qm_bias
+
+        attn = attn.softmax(dim=-1)
 
         attn = self.attn_drop(attn)
 

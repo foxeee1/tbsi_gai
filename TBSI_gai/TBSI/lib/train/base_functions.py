@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data.distributed import DistributedSampler
 # datasets related
-from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR
+from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR, MiniLasHeR
 from lib.train.dataset import Lasot_lmdb, Got10k_lmdb, MSCOCOSeq_lmdb, ImagenetVID_lmdb, TrackingNet_lmdb
 from lib.train.data import sampler, opencv_loader, processing, LTRLoader
 import lib.train.data.transforms as tfm
@@ -31,7 +31,8 @@ def names2datasets(name_list: list, settings, image_loader):
     datasets = []
     for name in name_list:
         assert name in ["LASOT", "GOT10K_vottrain", "GOT10K_votval", "GOT10K_train_full", "GOT10K_official_val",
-                        "COCO17", "VID", "TRACKINGNET", "LasHeR_train",  "LasHeR_test"]
+                        "COCO17", "VID", "TRACKINGNET", "LasHeR_train", "LasHeR_test",
+                        "MiniLasHeR_train", "MiniLasHeR_test"]
         if name == "LASOT":
             if settings.use_lmdb:
                 print("Building lasot dataset from lmdb")
@@ -85,7 +86,12 @@ def names2datasets(name_list: list, settings, image_loader):
             datasets.append(LasHeR(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
         if name == "LasHeR_test":
             datasets.append(LasHeR(settings.env.lasher_test_dir, split='test', image_loader=image_loader))
- 
+        # MiniLasHeR: rapid validation subset (30 sequences, 5 categories)
+        if name == "MiniLasHeR_train":
+            datasets.append(MiniLasHeR(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
+        if name == "MiniLasHeR_test":
+            datasets.append(MiniLasHeR(settings.env.lasher_test_dir, split='test', image_loader=image_loader))
+
     return datasets
 
 

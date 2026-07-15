@@ -38,12 +38,17 @@ def run(settings):
     # update settings based on cfg
     update_settings(settings, cfg)
 
+    # ===== Redirect all output to experiments/{config_name}/ =====
+    # Each experiment gets its own folder, keeping checkpoints/logs/test_results together
+    settings.save_dir = os.path.join(settings.save_dir, 'experiments', settings.config_name)
+    settings.project_path = ''  # avoid double-nesting with config name
+
     # Record the training log
     log_dir = os.path.join(settings.save_dir, 'logs')
     if settings.local_rank in [-1, 0]:
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
-    settings.log_file = os.path.join(log_dir, "%s-%s.log" % (settings.script_name, settings.config_name))
+    settings.log_file = os.path.join(log_dir, "training.log")
 
     # Build dataloaders
     loader_train, loader_val = build_dataloaders(cfg, settings)

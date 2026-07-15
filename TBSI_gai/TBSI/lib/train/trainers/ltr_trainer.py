@@ -112,11 +112,11 @@ class LTRTrainer(BaseTrainer):
                     if self.accum_count % self.accum_steps == 0:
                         if self.settings.grad_clip_norm > 0:
                             torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
-                        self.optimizer.step()
-                        self.optimizer.zero_grad(set_to_none=True)
-                        # Diagnostics after each optimizer step
+                        # Diagnostics: capture gradients BEFORE optimizer.step() and zero_grad()
                         if self.diagnostics and i % self.settings.print_interval == 0:
                             self.diagnostics.log_all(self.actor.net, stats, i, self.epoch)
+                        self.optimizer.step()
+                        self.optimizer.zero_grad(set_to_none=True)
                 else:
                     self.scaler.scale(loss).backward()
                     self.accum_count += 1
@@ -124,12 +124,12 @@ class LTRTrainer(BaseTrainer):
                         self.scaler.unscale_(self.optimizer)
                         if self.settings.grad_clip_norm > 0:
                             torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
+                        # Diagnostics: capture gradients BEFORE optimizer.step() and zero_grad()
+                        if self.diagnostics and i % self.settings.print_interval == 0:
+                            self.diagnostics.log_all(self.actor.net, stats, i, self.epoch)
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                         self.optimizer.zero_grad(set_to_none=True)
-                        # Diagnostics after each optimizer step (AMP)
-                        if self.diagnostics and i % self.settings.print_interval == 0:
-                            self.diagnostics.log_all(self.actor.net, stats, i, self.epoch)
 
             # update statistics
             batch_size = data['visible']['template_images'].shape[loader.stack_dim]

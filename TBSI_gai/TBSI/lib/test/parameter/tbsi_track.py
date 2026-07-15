@@ -22,8 +22,15 @@ def parameters(yaml_name: str):
     params.search_size = cfg.TEST.SEARCH_SIZE
 
     # Network checkpoint path: matches training save path
-    params.checkpoint = os.path.join(save_dir, "checkpoints/train/tbsi_track/%s/TBSITrack_ep%04d.pth.tar" %
-                                     (yaml_name, cfg.TEST.EPOCH))
+    # Priority: new structure (experiments/{name}/checkpoints/) first, fallback to old structure
+    new_ckpt = os.path.join(save_dir, "experiments/%s/checkpoints/TBSITrack_ep%04d.pth.tar" %
+                            (yaml_name, cfg.TEST.EPOCH))
+    old_ckpt = os.path.join(save_dir, "checkpoints/train/tbsi_track/%s/TBSITrack_ep%04d.pth.tar" %
+                            (yaml_name, cfg.TEST.EPOCH))
+    if os.path.exists(new_ckpt):
+        params.checkpoint = new_ckpt
+    else:
+        params.checkpoint = old_ckpt
 
     # whether to save boxes from all queries
     params.save_all_boxes = False

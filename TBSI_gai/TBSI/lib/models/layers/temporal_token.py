@@ -71,7 +71,16 @@ class TemporalTokenLayer(nn.Module):
                         prev_tokens: torch.Tensor,
                         init_tokens: torch.Tensor) -> tuple:
         """
-        Single modality forward.
+        [Phase 1 Fix] Token-Centric Attention: Q=tokens, KV=feat.
+
+        BEFORE: Q=KV=[feat;tokens] (full self-attention, N+K positions).
+          Problem: features attend to tokens = feature pollution; 97% of attention
+          weight is on self (features-to-features), tokens never learn useful signal.
+
+        AFTER: Q=tokens, KV=feat (tokens-as-queries, features-as-keyvalues).
+          - Tokens encode the current feature state by attending to features
+          - Features remain uncontaminated by token signals
+          - Much lower FLOPs: O(K*N) vs O((N+K)^2)
 
         Args:
             feat: (B, N, D) — 256 search tokens per modality
@@ -79,47 +88,40 @@ class TemporalTokenLayer(nn.Module):
             init_tokens: (1, K, D) learned parameter
 
         Returns:
-            feat_out: (B, N, D) temporally enhanced features
-            tok_out:  (B, K, D) updated tokens
+            feat_out: (B, N, D) unchanged features (pass-through)
+            tok_out:  (B, K, D) updated tokens encoding feature state
         """
         B, N, D = feat.shape
         K = self.num_tokens
 
-        # [Fix v1.2] Tokens carry state across frames
+        # Tokens carry state across frames
         tokens = prev_tokens if prev_tokens is not None else init_tokens.expand(B, -1, -1)
 
-        # [Fix v1.1] Full self-attention: Q = KV = [feat, tokens]
-        # All N+K positions attend to each other → tokens get updated
-        x = torch.cat([feat, tokens], dim=1)            # (B, N+K, D)
-        x_norm = self.norm(x)                            # Pre-LN
+        # ===== Token-Centric Attention: Q=tokens, KV=feat =====
+        # No feature pollution: features are used as key/value only
+        feat_norm = self.norm(feat)
+        tok_norm = self.norm(tokens)
 
-        q = self.q_proj(x_norm).reshape(B, N+K, self.num_heads, D // self.num_heads).permute(0, 2, 1, 3)
-        k, v = self.kv_proj(x_norm).reshape(
-            B, N+K, 2, self.num_heads, D // self.num_heads
+        q = self.q_proj(tok_norm).reshape(B, K, self.num_heads, D // self.num_heads).permute(0, 2, 1, 3)
+        k, v = self.kv_proj(feat_norm).reshape(
+            B, N, 2, self.num_heads, D // self.num_heads
         ).permute(2, 0, 3, 1, 4)
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale   # (B, H, N+K, N+K)
+        attn = (q @ k.transpose(-2, -1)) * self.scale   # (B, H, K, N)
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        out = (attn @ v).transpose(1, 2).reshape(B, N+K, D)
-        out = self.proj(out)
-        out = self.proj_drop(out)
-
-        # Split: first N = features, last K = tokens
-        feat_out = out[:, :N, :]
-        tok_raw = out[:, N:, :]
-
-        # ===== Feature residual + MLP =====
-        feat_out = feat + self.drop_path(feat_out)
-        feat_out = feat_out + self.drop_path(self.mlp(self.norm(feat_out)))
+        tok_out = (attn @ v).transpose(1, 2).reshape(B, K, D)
+        tok_out = self.proj(tok_out)
+        tok_out = self.proj_drop(tok_out)
 
         # ===== Token residual + learnable update gate =====
-        # Gate controls how much token content is updated per step.
-        # sigmoid(gate) → 0..1, initialized to 0.5
         gate = torch.sigmoid(self.token_update_gate)
-        tok_out = tokens + self.drop_path(tok_raw)
+        tok_out = tokens + self.drop_path(tok_out)
         tok_out = gate * tok_out + (1 - gate) * tokens
+
+        # Features pass through unchanged
+        feat_out = feat
 
         return feat_out, tok_out
 

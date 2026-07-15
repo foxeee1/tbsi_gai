@@ -282,7 +282,8 @@ class TBSITrack(nn.Module):
         return out
 
     def forward_fusion_only(self, cat_feature):
-        """Extract search RGB/TIR + DA fusion. Returns (B, C, H, W) fused features."""
+        """Extract search RGB/TIR + DA fusion. Returns (B, C, H, W) fused features.
+        [Phase 1 Fix] Removed .detach() on base_fused so gradients flow through."""
         B = cat_feature.shape[0]
         C = cat_feature.shape[-1]
         num_search_token = 256
@@ -306,7 +307,7 @@ class TBSITrack(nn.Module):
             else:
                 da_fused = self.da_fusion(feat_rgb, feat_tir)
                 scale = getattr(self, 'da_fusion_scale', 0.5)
-                return base_fused.detach() + scale * da_fused
+                return base_fused + scale * da_fused  # [Fix] no .detach()
         else:
             return self.tbsi_fuse_search(opt_feat)
 
