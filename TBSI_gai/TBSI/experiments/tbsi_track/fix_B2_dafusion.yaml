@@ -1,0 +1,111 @@
+# ==============================================================================
+# 四模块全开+全bug 对照实验 (MiniLasHeR)
+# ==============================================================================
+# 目的: 在完美基线小数据基础上，同时打开 A/B/C/D 四个额外模块
+#       (保留所有已知 bug，不做任何修复)，作为对照实验
+# ==============================================================================
+# 模块清单:
+#   A+B+C: DA_IN_LAYER=True → TBSILayer 内 DegradationModulator + quality_mask
+#   B+DEGRADATION_AWARE: DaFusion (spatial+channel+MADC+CSR)
+#   D+TEMPORAL_TOKENS: TemporalTokenBlock (K=4) + TemporalChannelCalibration
+# ==============================================================================
+# 已知 bug（不修复）:
+#   1. .detach() in DaFusion residual (tbsi_track.py:309)
+#   2. DegradationModulator 零初始化索引 [-2] 应为 [-1]
+#   3. quality_mask post-softmax 乘法，错误位置
+#   4. DegradationModulator 独立 MLP，违背"可靠性是关系属性"
+#   5. TemporalToken 交叉注意力 Q=KV=[feat;tokens]，设计不合理
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - MiniLasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 3000
+  VAL:
+    DATASETS_NAME:
+      - MiniLasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 1000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  # === Module D: TemporalToken ===
+  TEMPORAL_TOKENS: True
+  NUM_TEMPORAL_TOKENS: 4
+  # === Module A+C: DegradationModulator + quality_mask (in TBSILayer) ===
+  DA_IN_LAYER: True
+  # === Module B: DaFusion (full: spatial+channel gate + MADC + CSR) ===
+  DEGRADATION_AWARE: True
+  DA_MODE: channel
+  DA_MADC: True
+  DA_CSR: True
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  # TemporalToken 独立 LR（bug: 高 LR 可能导致不稳定）
+  TEMPORAL_LR: 0.0005
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.1
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 4
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 10
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 5
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 2
+  SAVE_EPOCHS: [1, 2, 3, 5, 10, 15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128
