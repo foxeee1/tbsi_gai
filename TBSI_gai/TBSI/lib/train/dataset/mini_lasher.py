@@ -25,7 +25,12 @@ Reference:
   - Full training ~2.5h → Mini training ~15 min (single GPU)
 """
 
+import os
+import random
+
+from lib.train.dataset.base_video_dataset import BaseVideoDataset
 from .lasher import LasHeR
+from .mini_sets import ALL_MINI_SETS
 
 # =============================================================================
 # MiniLasHeR Training Sequences: 30 from LasHeR training set
@@ -139,11 +144,22 @@ class MiniLasHeR(LasHeR):
 
     def __init__(self, root=None, image_loader=None, split=None, seq_ids=None, data_fraction=None,
                  mini_sequences=None):
-        # Match LasHeR.__init__ signature so positional args (root, image_loader, split) are dispatched correctly
-        super().__init__(root=root, image_loader=image_loader, split=split,
-                         seq_ids=seq_ids, data_fraction=data_fraction)
+        # Use env_settings like LasHeR does, but skip the parent's _pre_cache_dir_listings
+        # which fails on 977 seqs when the RAID is under load
+        from lib.train.admin import env_settings
+        root = env_settings().lasher_train_dir if root is None and split != 'test' else root
+        root = env_settings().lasher_test_dir if root is None and split == 'test' else root
+        root = env_settings().lasher_dir if root is None else root
+        BaseVideoDataset.__init__(self, 'LasHeR_add', root, image_loader)
+        self.sequence_list = self._get_sequence_list(split)
+        if data_fraction is not None:
+            self.sequence_list = random.sample(self.sequence_list,
+                                                int(len(self.sequence_list)*data_fraction))
+        self.sequence_meta_info = self._load_meta_info()
+        self.seq_per_class = self._build_seq_per_class()
+        self.class_list = list(self.seq_per_class.keys())
+        self.class_list.sort()
 
-        # Determine which mini set to use based on split
         user_provided = mini_sequences is not None
         if mini_sequences is None:
             is_test_split = split == 'test'
@@ -151,27 +167,55 @@ class MiniLasHeR(LasHeR):
         else:
             is_test_split = split == 'test'
 
-        # Retain only the mini subset
         available = set(self.sequence_list)
         self.sequence_list = [s for s in mini_sequences if s in available]
-        missing = [s for s in mini_sequences if s not in available]
-        if missing:
-            print(f"[MiniLasHeR] WARNING: {len(missing)} requested sequence(s) "
-                  f"not found in dataset: {missing}")
+        missing_seqs = [s for s in mini_sequences if s not in available]
+        if missing_seqs:
+            print(f"[MiniLasHeR] WARNING: {len(missing_seqs)} not found: {missing_seqs}")
 
-        # Rebuild class index and dir-listing cache for the subset
+        # Build cache only for active sequences, tolerant of IO errors
+        self._vis_files_cache = {}
+        self._inf_files_cache = {}
+        self._image_cache = {}
+        self._image_cache_max_size = 5000
+        self._cache_hits = 0
+        self._cache_misses = 0
+        for seq_rel in list(self.sequence_list):
+            try:
+                self._vis_files_cache[seq_rel] = sorted(os.listdir(
+                    os.path.join(self.root, seq_rel, 'visible')))
+                self._inf_files_cache[seq_rel] = sorted(os.listdir(
+                    os.path.join(self.root, seq_rel, 'infrared')))
+            except (FileNotFoundError, OSError):
+                print(f"[MiniLasHeR] Skipping {seq_rel} (IO error)")
+                self.sequence_list.remove(seq_rel)
+        total_frames = sum(len(self._vis_files_cache.get(s, [])) for s in self.sequence_list)
+        print(f"  [MiniLasHeR] Active: {len(self.sequence_list)} seqs, ~{total_frames} frames")
+
+        # Rebuild class index for the subset (cache already built above)
         self.seq_per_class = self._build_seq_per_class()
-        self._pre_cache_dir_listings()
-
-        # Log stats
-        total_frames = sum(
-            len(self._vis_files_cache.get(s, [])) for s in self.sequence_list
-        )
         set_name = ("Test" if is_test_split else "Train") if not user_provided else "Custom"
         print(f"[MiniLasHeR/{set_name}] Initialized:")
         print(f"  Active sequences: {len(self.sequence_list)} / requested {len(mini_sequences)}")
         print(f"  Estimated frames: ~{total_frames}")
-        print(f"  Categories: Normal, Illumination, ThermalCross, Occlusion, FastMotion")
 
     def get_name(self):
         return 'mini_lasher'
+
+
+class MiniLasHeRA(MiniLasHeR):
+    """MiniLasHeR set A — stratified sampling matching LasHeR distribution."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(mini_sequences=ALL_MINI_SETS['MiniA'], *args, **kwargs)
+
+
+class MiniLasHeRB(MiniLasHeR):
+    """MiniLasHeR set B — stratified sampling matching LasHeR distribution."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(mini_sequences=ALL_MINI_SETS['MiniB'], *args, **kwargs)
+
+
+class MiniLasHeRC(MiniLasHeR):
+    """MiniLasHeR set C — stratified sampling matching LasHeR distribution."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(mini_sequences=ALL_MINI_SETS['MiniC'], *args, **kwargs)

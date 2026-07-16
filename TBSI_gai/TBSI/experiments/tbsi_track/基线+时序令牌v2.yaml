@@ -1,0 +1,100 @@
+# ==============================================================================
+# 基线+时序令牌v2 — 时序令牌 v2 单独消融
+# ==============================================================================
+# 目的: 验证时序令牌 v2 单独使用时的性能 (quality 接口关闭)
+# 设计: 多粒度门控 + 跨模态交互 (但 quality_hint=None, 自动退化为纯 learned gate)
+# 对比: 完美基线小数据 → 基线+时序令牌v2
+# ==============================================================================
+# 🔧 vs 基线+时序令牌 (v1) 的改动:
+#   1. 时序令牌改用 v2 (temporal_token_v2.py): 多粒度门控 + 跨模态 token 交互
+#   2. QUALITY_GATE: False — 关闭 quality 接口，纯特征驱动门控
+#   3. GRAD_CLIP_NORM: 0.1 → 0.3 (减轻裁剪，给新增参数更多梯度空间)
+#   4. TEMPORAL_LR: 5e-4 (保持)
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - MiniLasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 3000
+  VAL:
+    DATASETS_NAME:
+      - MiniLasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 1000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  # === 时序令牌 v2 ===
+  TEMPORAL_TOKENS: True
+  TEMPORAL_TOKENS_V2: True          # 启用 v2 版本
+  NUM_TEMPORAL_TOKENS: 4
+  QUALITY_GATE: False               # standalone: 关闭 quality 接口
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  TEMPORAL_LR: 0.0005
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.3               # v2: 从 0.1 放宽到 0.3
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 4
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 10
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 5
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 2
+  SAVE_EPOCHS: [1, 2, 3, 5, 10, 15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128

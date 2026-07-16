@@ -1,0 +1,116 @@
+# ==============================================================================
+# 基线+融合+时序令牌v2 — 双模块协同消融
+# ==============================================================================
+# 目的: 验证 DaFusion (质量感知融合) + 时序令牌 v2 的协同增益
+# 协同设计:
+#   DaFusion → 输出 quality_hint (B,2) 每模态质量评分
+#   时序令牌 v2 → 用 quality_hint 调制更新门控
+#   TC3 通道校准 → 用更新后的 token 调制融合特征
+#
+# 预期: 双模块增益 >> 各自单独增益之和
+# 消融序列:
+#   A: 完美基线
+#   B: 完美基线 + DaFusion          (融合独立贡献)
+#   C: 完美基线 + 时序令牌 v2         (时序独立贡献)
+#   D: 完美基线 + DaFusion + 时序令牌 v2  (协同增益)
+# ==============================================================================
+# 🔧 vs 完美基线的改动:
+#   1. 质量感知融合 (DaFusion): spatial gate + channel gate + MADC + CSR
+#   2. 时序令牌 v2: 多粒度门控 + 跨模态交互 + quality-aware gate
+#   3. QUALITY_GATE: True — 开启 quality 接口，融合模块驱动令牌更新
+#   4. TEMPORAL_LR: 5e-4 (时序令牌高 LR)
+#   5. GRAD_CLIP_NORM: 0.1 → 0.3
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - MiniLasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 3000
+  VAL:
+    DATASETS_NAME:
+      - MiniLasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 1000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  # === 时序令牌 v2 ===
+  TEMPORAL_TOKENS: True
+  TEMPORAL_TOKENS_V2: True
+  NUM_TEMPORAL_TOKENS: 4
+  QUALITY_GATE: True                # 开启 quality 接口: DaFusion → 令牌门控
+  # === 质量感知融合 ===
+  DEGRADATION_AWARE: True
+  DA_MODE: channel                  # spatial + channel gate
+  DA_MADC: True                     # 幅度归一化
+  DA_CSR: True                      # 互补增强
+  DA_IN_LAYER: False                # TBSILayer 内 quality hint (暂不开启)
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  TEMPORAL_LR: 0.0005
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.3
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 4
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 10
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 5
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 2
+  SAVE_EPOCHS: [1, 2, 3, 5, 10, 15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128

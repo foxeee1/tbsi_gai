@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data.distributed import DistributedSampler
 # datasets related
-from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR, MiniLasHeR
+from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR, MiniLasHeR, MiniLasHeRA, MiniLasHeRB, MiniLasHeRC
 from lib.train.dataset import Lasot_lmdb, Got10k_lmdb, MSCOCOSeq_lmdb, ImagenetVID_lmdb, TrackingNet_lmdb
 from lib.train.data import sampler, opencv_loader, processing, LTRLoader
 import lib.train.data.transforms as tfm
@@ -32,7 +32,8 @@ def names2datasets(name_list: list, settings, image_loader):
     for name in name_list:
         assert name in ["LASOT", "GOT10K_vottrain", "GOT10K_votval", "GOT10K_train_full", "GOT10K_official_val",
                         "COCO17", "VID", "TRACKINGNET", "LasHeR_train", "LasHeR_test",
-                        "MiniLasHeR_train", "MiniLasHeR_test"]
+                        "MiniLasHeR_train", "MiniLasHeR_test",
+                        "MiniLasHeRA_train", "MiniLasHeRB_train", "MiniLasHeRC_train"]
         if name == "LASOT":
             if settings.use_lmdb:
                 print("Building lasot dataset from lmdb")
@@ -91,6 +92,13 @@ def names2datasets(name_list: list, settings, image_loader):
             datasets.append(MiniLasHeR(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
         if name == "MiniLasHeR_test":
             datasets.append(MiniLasHeR(settings.env.lasher_test_dir, split='test', image_loader=image_loader))
+        # MiniLasHeR stratified subsets A/B/C (25 seqs each, matches full distribution)
+        if name == "MiniLasHeRA_train":
+            datasets.append(MiniLasHeRA(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
+        if name == "MiniLasHeRB_train":
+            datasets.append(MiniLasHeRB(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
+        if name == "MiniLasHeRC_train":
+            datasets.append(MiniLasHeRC(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
 
     return datasets
 

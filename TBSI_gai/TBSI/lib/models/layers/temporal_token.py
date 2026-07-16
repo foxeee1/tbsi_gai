@@ -120,6 +120,9 @@ class TemporalTokenLayer(nn.Module):
         tok_out = tokens + self.drop_path(tok_out)
         tok_out = gate * tok_out + (1 - gate) * tokens
 
+        # ===== Post-attention FFN (MLP was defined but never called — fix dead code) =====
+        tok_out = tok_out + self.drop_path(self.mlp(self.norm(tok_out)))
+
         # Features pass through unchanged
         feat_out = feat
 

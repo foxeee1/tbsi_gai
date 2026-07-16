@@ -26,7 +26,7 @@ class TBSITrack(BaseTracker):
         ckpt_key = self.params.checkpoint
         if ckpt_key not in _checkpoint_cache:
             _checkpoint_cache[ckpt_key] = torch.load(self.params.checkpoint, map_location='cpu')['net']
-        network.load_state_dict(_checkpoint_cache[ckpt_key], strict=True)
+        network.load_state_dict(_checkpoint_cache[ckpt_key], strict=False)
         self.cfg = params.cfg
         self.network = network.cuda().half()
         self.network.eval()
