@@ -14,6 +14,7 @@ from torch.nn.modules.transformer import _get_clones
 from lib.models.layers.head import build_box_head, conv
 from lib.models.tbsi_track.vit_tbsi_care import vit_base_patch16_224_tbsi
 from lib.models.layers.temporal_token import TemporalTokenBlock
+from lib.models.layers.dafusion_v2 import DaFusionV2
 from lib.utils.box_ops import box_xyxy_to_cxcywh
 
 
@@ -186,7 +187,7 @@ class TBSITrack(nn.Module):
     def __init__(self, transformer, box_head, aux_loss=False, head_type="CORNER",
                  use_temporal_tokens=False, num_temporal_tokens=4,
                  use_degradation_aware=False, da_mode='spatial',
-                 use_madc=False, use_csr=False):
+                 use_madc=False, use_csr=False, da_v2=False):
         super().__init__()
         hidden_dim = transformer.embed_dim
         self.backbone = transformer
@@ -215,8 +216,13 @@ class TBSITrack(nn.Module):
         # Quality-Aware Fusion Module (post temporal token)
         self.use_degradation_aware = use_degradation_aware
         if use_degradation_aware:
-            self.da_fusion = DegradationAwareFusion(dim=hidden_dim, da_mode=da_mode,
-                                                    use_madc=use_madc, use_csr=use_csr)
+            if da_v2:
+                print('  Using DaFusionV2 — true degradation-aware fusion')
+                self.da_fusion = DaFusionV2(dim=hidden_dim, da_mode=da_mode,
+                                            use_madc=use_madc, use_csr=use_csr)
+            else:
+                self.da_fusion = DegradationAwareFusion(dim=hidden_dim, da_mode=da_mode,
+                                                        use_madc=use_madc, use_csr=use_csr)
             self.da_fusion_mode = 'residual'  # 'residual' | 'gate'
             self.da_fusion_scale = 0.5        # residual scale
 
@@ -224,7 +230,7 @@ class TBSITrack(nn.Module):
         parts = []
         if use_temporal_tokens: parts.append(f'TemporalTokens(K={num_temporal_tokens})')
         if use_degradation_aware:
-            da_str = 'QualityAwareFusion'
+            da_str = 'DaFusionV2' if da_v2 else 'DaFusionV1'
             if use_madc: da_str += '+MADC'
             if use_csr: da_str += '+CSR'
             parts.append(da_str)
@@ -391,13 +397,15 @@ def build_tbsi_track(cfg, training=True):
 
     use_temporal = getattr(cfg.MODEL, "TEMPORAL_TOKENS", False)
     use_da = getattr(cfg.MODEL, "DEGRADATION_AWARE", False)
+    da_v2 = getattr(cfg.MODEL, "DA_V2", False)
     da_mode = getattr(cfg.MODEL, "DA_MODE", "spatial")
     use_madc = getattr(cfg.MODEL, "DA_MADC", False)
     use_csr = getattr(cfg.MODEL, "DA_CSR", False)
     num_temporal = getattr(cfg.MODEL, "NUM_TEMPORAL_TOKENS", 4)
 
     if use_da:
-        da_str = f'Building model with Quality-Aware Fusion ({da_mode}'
+        da_str = 'DaFusionV2' if da_v2 else 'DaFusionV1'
+        da_str += f' ({da_mode}'
         if use_madc: da_str += '+MADC'
         if use_csr: da_str += '+CSR'
         print(da_str + ')')
@@ -411,6 +419,7 @@ def build_tbsi_track(cfg, training=True):
         da_mode=da_mode,
         use_madc=use_madc,
         use_csr=use_csr,
+        da_v2=da_v2,
     )
 
     # Stage 2: load baseline checkpoint + freeze all except post_fusion_block

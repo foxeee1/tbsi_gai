@@ -48,6 +48,7 @@ cfg.MODEL.DEGRADATION_AWARE = False
 cfg.MODEL.DA_MODE = 'channel'  # 'spatial' | 'channel'
 cfg.MODEL.DA_MADC = False  # MADC: Modal Adaptive Distribution Calibration
 cfg.MODEL.DA_CSR = False  # CSR: Complementary-Aware Spatial Reweighting
+cfg.MODEL.DA_V2 = False   # DaFusionV2: 真正的质量感知融合 (多分辨率退化编码 + MoE原型路由)
 cfg.MODEL.DA_FUSION_MODE = "residual"
 cfg.MODEL.DA_FUSION_SCALE = 0.5
 cfg.MODEL.DA_IN_LAYER = False  # Per-layer degradation-aware cross-attention modulation

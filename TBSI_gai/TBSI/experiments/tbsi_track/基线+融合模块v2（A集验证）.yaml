@@ -1,0 +1,104 @@
+# ==============================================================================
+# [A集验证] 基线+融合模块v2 — 真正的质量感知融合
+# ==============================================================================
+# 目的: 在 MiniA 集上验证 DaFusionV2 的质量感知融合
+# 对比: 完美基线小数据A (待训) vs 基线+融合模块v2 (A集验证)
+# ==============================================================================
+# 🔧 相对完美基线的改动:
+#   1. DEGRADATION_AWARE: True + DA_V2: True
+#      → 使用 DaFusionV2 (DegradationEncoder + MoE式原型路由)
+#   2. DA_MODE: channel + DA_MADC: True + DA_CSR: True
+#   3. GRAD_CLIP_NORM: 0.1 → 0.3 (减轻裁剪, 给DegradationEncoder梯度空间)
+#   4. 训练数据: MiniLasHeRA_train (25 seqs, 分层抽样)
+# ==============================================================================
+# 📋 消融序列 (完整版):
+#   A: 完美基线小数据A
+#   B: 完美基线小数据A + DaFusionV2 (本实验)
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - MiniLasHeRA_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 3000
+  VAL:
+    DATASETS_NAME:
+      - MiniLasHeRA_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 1000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  # === 融合模块 v2 (真正的质量感知) ===
+  DEGRADATION_AWARE: True
+  DA_V2: True                     # 使用 DaFusionV2
+  DA_MODE: channel                # spatial + channel gate
+  DA_MADC: True                   # 幅度归一化
+  DA_CSR: True                    # 互补增强
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.3             # v2: 从 0.1 放宽到 0.3
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 4
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 10
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 5
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 2
+  SAVE_EPOCHS: [1, 2, 3, 5, 10, 15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128
