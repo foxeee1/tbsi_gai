@@ -11,61 +11,37 @@ from lib.models.layers.attn_blocks import CASTBlock
 class DivergenceRouter(nn.Module):
     """
     DGSFusion: Divergence-Gated Specialized Fusion — per-token routing router.
-    v2: grouped statistics for fine-grained degradation sensing.
-
-    Key improvement over v1:
-      v1: collapse 768 channels → 1 std (loses frequency info → MB broken)
-      v2: split 768 channels into G=8 groups → 8 independent stds
-          → motion blur kills high-freq groups, leaves low-freq → distinguishable
 
     Architecture:
-      per-token divergence signature (B, N, 4*G+2):
-        G groups × rgb_mean, rgb_std, tir_mean, tir_std + diff_mean + bias
-      → Linear(34→8) → ReLU → Linear(8→3) → Softmax
+      per-token divergence signature (B, N, 6):
+        rgb_mean, rgb_std, tir_mean, tir_std, diff_mean, bias
+      → Linear(6→4) → ReLU → Linear(4→3) → Softmax
 
-    Params: 34*8+8 + 8*3+3 = 307 (vs v1 43, still negligible vs 86M backbone)
+    Params: 43
     """
-    NUM_GROUPS = 8  # G=8 groups × 96 channels each
-
     def __init__(self, dim=768):
         super().__init__()
-        g = self.NUM_GROUPS
         self.router = nn.Sequential(
-            nn.Linear(4 * g + 2, g),       # 34→8
+            nn.Linear(6, 4),
             nn.ReLU(inplace=True),
-            nn.Linear(g, 3),                # 8→3
+            nn.Linear(4, 3),
         )
         nn.init.zeros_(self.router[-1].weight)
         nn.init.zeros_(self.router[-1].bias)
 
     @staticmethod
-    def compute_divergence(x_v_search, x_i_search, num_groups=8):
-        """
-        Per-token grouped divergence signature.
-        Args: x_v_search, x_i_search: (B, N_s, C)
-        Returns: (B, N_s, 4*num_groups+2)
-        """
-        C = x_v_search.shape[-1]
-        assert C % num_groups == 0, f"C={C} must be divisible by num_groups={num_groups}"
-        gs = C // num_groups  # group size (96 for 768/8)
-
-        # Reshape to (B, N, G, gs) and compute per-group statistics
-        v = x_v_search.reshape(*x_v_search.shape[:-1], num_groups, gs)
-        i = x_i_search.reshape(*x_i_search.shape[:-1], num_groups, gs)
-
-        rgb_mean = v.mean(dim=-1)  # (B, N, G)
-        rgb_std = v.std(dim=-1)
-        tir_mean = i.mean(dim=-1)
-        tir_std = i.std(dim=-1)
-
+    def compute_divergence(x_v_search, x_i_search):
+        rgb_mean = x_v_search.mean(dim=-1)
+        rgb_std = x_v_search.std(dim=-1)
+        tir_mean = x_i_search.mean(dim=-1)
+        tir_std = x_i_search.std(dim=-1)
         diff = (x_v_search - x_i_search).abs()
-        diff_mean = diff.mean(dim=-1, keepdim=True)  # (B, N, 1)
-        bias = (x_v_search.mean(dim=-1) - x_i_search.mean(dim=-1)).abs().unsqueeze(-1)
-
-        return torch.cat([rgb_mean, rgb_std, tir_mean, tir_std, diff_mean, bias], dim=-1)
+        diff_mean = diff.mean(dim=-1)
+        bias = (x_v_search.mean(dim=-1) - x_i_search.mean(dim=-1)).abs()
+        return torch.stack([rgb_mean, rgb_std, tir_mean, tir_std, diff_mean, bias], dim=-1)
 
     def forward(self, x_v_search, x_i_search):
-        d = self.compute_divergence(x_v_search, x_i_search, self.NUM_GROUPS)
+        d = self.compute_divergence(x_v_search, x_i_search)
         logits = self.router(d)
         routing = F.softmax(logits, dim=-1)
         return routing
