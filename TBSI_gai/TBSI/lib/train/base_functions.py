@@ -203,6 +203,7 @@ def get_optimizer_scheduler(net, cfg):
         else:
             # Token LR放大: 如果设置了TEMPORAL_LR, token参数用独立高LR
             temporal_lr = getattr(cfg.TRAIN, "TEMPORAL_LR", None)
+            router_lr = getattr(cfg.TRAIN, "ROUTER_LR", None)
             if temporal_lr:
                 param_dicts = [
                     {
@@ -212,6 +213,18 @@ def get_optimizer_scheduler(net, cfg):
                     {"params": [p for n, p in net.named_parameters() if "tbsi" in n and p.requires_grad]},
                     {
                         "params": [p for n, p in net.named_parameters() if "tbsi" not in n and "temporal_token" not in n and p.requires_grad],
+                        "lr": cfg.TRAIN.LR * cfg.TRAIN.BACKBONE_MULTIPLIER,
+                    },
+                ]
+            elif router_lr:
+                param_dicts = [
+                    {
+                        "params": [p for n, p in net.named_parameters() if "dgs_router" in n and p.requires_grad],
+                        "lr": router_lr,
+                    },
+                    {"params": [p for n, p in net.named_parameters() if "tbsi" in n and "dgs_router" not in n and p.requires_grad]},
+                    {
+                        "params": [p for n, p in net.named_parameters() if "tbsi" not in n and "dgs_router" not in n and p.requires_grad],
                         "lr": cfg.TRAIN.LR * cfg.TRAIN.BACKBONE_MULTIPLIER,
                     },
                 ]

@@ -86,6 +86,7 @@ cfg.TRAIN.TBSI_DROP_RATE = 0.  # dropout rate for TransformerDecoderLayer
 cfg.TRAIN.TBSI_DROP_PATH = []  # drop_path rate for TBSI Attention_st
 cfg.TRAIN.SOT_PRETRAIN = False  # SOT pretraining with shared backbones
 cfg.TRAIN.TEMPORAL_LR = None  # Independent LR for temporal token params (if set, overrides default grouping)
+cfg.TRAIN.ROUTER_LR = None    # Independent LR for dgs_router params
 
 cfg.TRAIN.BN_MOMENTUM = None  # BN momentum override (None = use default 0.1)
 cfg.TRAIN.GRAD_ACCUM_STEPS = 1  # gradient accumulation steps

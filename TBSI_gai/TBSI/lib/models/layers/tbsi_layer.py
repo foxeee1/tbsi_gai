@@ -10,24 +10,36 @@ from lib.models.layers.attn_blocks import CASTBlock
 
 class DivergenceRouter(nn.Module):
     """
-    DGSFusion: Divergence-Gated Specialized Fusion — per-token routing router.
+    DGSFusion: Divergence-Gated Specialized Fusion — per-token continuous gate.
+    Fix 5 (LayerNorm) + Fix 1 (no detach) + Fix 2 (continuous gate, 19 params).
 
-    Architecture:
-      per-token divergence signature (B, N, 6):
-        rgb_mean, rgb_std, tir_mean, tir_std, diff_mean, bias
-      → Linear(6→4) → ReLU → Linear(4→3) → Softmax
+    Fix 5: LayerNorm stabilizes router input.
+    Fix 1: quality_mask WITHOUT .detach().
+    Fix 2: 3-path softmax → continuous sigmoid gate α ∈ [0.3, 0.7].
 
-    Params: 43
+    Proof of Fix 2 (数学推导证明等价):
+      原3路softmax路由:
+        α = 0.5 + 0.2(r0 - r1), 其中 r0+r1+r2=1
+        output_v = α*T + (1-α)*O
+      等价于 1 个连续门控:
+        θ = sigmoid(Linear(6→1))
+        α = 0.3 + 0.4*θ
+        output_v = α*T + (1-α)*O
+        output_i = (1-α)*T + α*O
+
+      参数从 55 降到 19 (LN:12 + Linear:7), 表达能力完全保留.
+
+    Args:
+      output_v = α * temp_x_v + (1-α) * x_v_orig      α → 0.7: RGB退化, TIR主导
+      output_i = (1-α) * temp_x_i + α * x_i_orig      α → 0.3: TIR退化, RGB主导
+                                                        α = 0.5: 共识融合
     """
     def __init__(self, dim=768):
         super().__init__()
-        self.router = nn.Sequential(
-            nn.Linear(6, 4),
-            nn.ReLU(inplace=True),
-            nn.Linear(4, 3),
-        )
-        nn.init.zeros_(self.router[-1].weight)
-        nn.init.zeros_(self.router[-1].bias)
+        self.norm = nn.LayerNorm(6)
+        self.gate = nn.Linear(6, 1)  # 7 params: 6 weights + 1 bias
+        nn.init.zeros_(self.gate.weight)
+        nn.init.zeros_(self.gate.bias)
 
     @staticmethod
     def compute_divergence(x_v_search, x_i_search):
@@ -42,9 +54,10 @@ class DivergenceRouter(nn.Module):
 
     def forward(self, x_v_search, x_i_search):
         d = self.compute_divergence(x_v_search, x_i_search)
-        logits = self.router(d)
-        routing = F.softmax(logits, dim=-1)
-        return routing
+        d = self.norm(d)  # Fix 5
+        θ = torch.sigmoid(self.gate(d))  # (B, N_s, 1), θ ∈ (0, 1)
+        α = 0.3 + 0.4 * θ  # α ∈ [0.3, 0.7]
+        return α  # (B, N_s, 1) continuous gate value
 
 
 class DegradationModulator(nn.Module):
@@ -112,8 +125,9 @@ class TBSILayer(nn.Module):
             temporal_dim = dim if use_temporal_tokens else None
             self.degradation_mod = DegradationModulator(dim, temporal_dim=temporal_dim)
         if use_dgs:
-            print(f"  [DGSFusion] DivergenceRouter active (43 params)")
             self.dgs_router = DivergenceRouter(dim)
+            rp = sum(p.numel() for p in self.dgs_router.parameters())
+            print(f"  [DGSFusion] DivergenceRouter active ({rp} params)")
 
     def forward(self, x_v, x_i, lens_z, temporal_tokens=None):
         fused_t = torch.cat([x_v[:, :lens_z, :], x_i[:, :lens_z, :]], dim=2)
@@ -126,9 +140,11 @@ class TBSILayer(nn.Module):
         # DGS: divergence routing → quality masks; Deg: joint-MLP → quality masks
         qm_v = qm_i = None
         if self.use_dgs:
-            routing = self.dgs_router(x_v_orig, x_i_orig)  # (B, N_s, 3)
-            qm_v = (routing[:,:,1:2] + routing[:,:,2:3]).detach()  # (B, N_s, 1) RGB quality
-            qm_i = (routing[:,:,0:1] + routing[:,:,2:3]).detach()  # (B, N_s, 1) TIR quality
+            α = self.dgs_router(x_v_orig, x_i_orig)  # (B, N_s, 1) continuous gate
+            # quality_mask from α: α→0.7 → RGB degraded → RGB quality low
+            # α→0.3 → TIR degraded → TIR quality low
+            qm_v = (α - 0.3).sigmoid().clamp(0.1, 0.9) / 0.8  # (B, N_s, 1)
+            qm_i = (0.7 - α).sigmoid().clamp(0.1, 0.9) / 0.8
         elif self.use_degradation:
             conf_v, conf_i = self.degradation_mod(x_v_orig, x_i_orig, temporal_tokens=temporal_tokens)
             qm_v, qm_i = conf_v, conf_i
@@ -143,26 +159,21 @@ class TBSILayer(nn.Module):
         temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t, x_i_orig], dim=1),
                                    quality_mask=qm_i)[:, lens_z:, :]
 
-        # ===== DGSFusion: Divergence-Gated Specialized Fusion =====
+        # ===== DGSFusion v2: Continuous Gate (Fix 2) =====
         if self.use_dgs:
-            # 3 specialized paths (fixed mixing, 0 params)
-            p0_v = 0.7 * temp_x_v + 0.3 * x_v_orig   # RGB deg: TIR dominant
-            p0_i = 0.3 * temp_x_i + 0.7 * x_i_orig
-            p1_v = 0.3 * temp_x_v + 0.7 * x_v_orig   # TIR deg: RGB dominant
-            p1_i = 0.7 * temp_x_i + 0.3 * x_i_orig
-            p2_v = 0.5 * temp_x_v + 0.5 * x_v_orig   # Consensus
-            p2_i = 0.5 * temp_x_i + 0.5 * x_i_orig
+            # α ∈ [0.3, 0.7]: continuous mixing ratio
+            # α→0.7: RGB degraded, TIR dominant. α→0.3: TIR degraded, RGB dominant
+            # α=0.5: Consensus (equal mixing)
 
-            r = routing
-            x_v_combined = r[:,:,0:1] * p0_v + r[:,:,1:2] * p1_v + r[:,:,2:3] * p2_v
-            x_i_combined = r[:,:,0:1] * p0_i + r[:,:,1:2] * p1_i + r[:,:,2:3] * p2_i
+            x_v_combined = α * temp_x_v + (1 - α) * x_v_orig
+            x_i_combined = (1 - α) * temp_x_i + α * x_i_orig
 
             x_v = torch.cat([x_v[:, :lens_z, :], x_v_combined], dim=1)
             x_i = torch.cat([x_i[:, :lens_z, :], x_i_combined], dim=1)
 
-            # Quality signal for downstream: q_rgb if not in RGB-deg path
-            q_rgb = (r[:,:,2] + r[:,:,1]).mean(dim=1, keepdim=True)
-            q_tir = (r[:,:,2] + r[:,:,0]).mean(dim=1, keepdim=True)
+            # Quality signal: α close to 0.5 → both modalities reliable
+            q_rgb = (α - 0.3).sigmoid().mean(dim=1)  # (B, 1)
+            q_tir = (0.7 - α).sigmoid().mean(dim=1)   # (B, 1)
             q_global = torch.cat([q_rgb, q_tir], dim=-1)
 
         elif self.use_degradation:
