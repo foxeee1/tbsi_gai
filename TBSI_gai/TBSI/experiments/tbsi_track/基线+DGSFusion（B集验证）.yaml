@@ -1,0 +1,96 @@
+# ==============================================================================
+# [A集验证] DGSFusion — Divergence-Gated Specialized Fusion
+# ==============================================================================
+# 目的: 验证 DGSFusion 在 MiniA 上的有效性
+# 对比: 完美基线小数据A vs 基线+DGSFusion（A集验证）
+# ==============================================================================
+# 🔧 相对完美基线的改动:
+#   1. DGSFUSION: True → 在 TBSILayer 内启用分歧路由融合
+#      - per-token divergence signature (6维) → 3条专门化路径
+#      - 路径0: RGB增强(TIR主导), 路径1: TIR增强(RGB主导), 路径2: 共识融合
+#   2. GRAD_CLIP_NORM: 0.1 → 0.5 (路由器的梯度小，放宽有利于收敛)
+#   3. 仅新增 43 参数的可学习路由器，3条路径的 mixing ratio 固定
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - MiniLasHeRB_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 3000
+  VAL:
+    DATASETS_NAME:
+      - MiniLasHeRB_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 1000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  # === DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer) ===
+  DGSFUSION: True
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.5
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 4
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 10
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 5
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 2
+  SAVE_EPOCHS: [1, 2, 3, 5, 10, 15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128
