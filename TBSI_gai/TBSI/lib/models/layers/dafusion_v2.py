@@ -77,17 +77,21 @@ class DegradationDescriptor(nn.Module):
 
 class DaFusionV2(nn.Module):
     """
-    Degradation-Aware Fusion v2 — with per-channel quality modulation.
+    DaFusionV2 — Degradation-Gated Fusion (DGF).
+
+    Key insight: degradation descriptor output is injected DIRECTLY into
+    the spatial gate input, making per-pixel weights degradation-aware.
 
     Architecture:
-      - DegradationDescriptor (6D → 2 scalars + 2C channel weights)
-      - spatial_gate (1×1 conv + BN + ReLU + 1×1 conv)
-      - channel_gate (SENet-style, conditioned by quality channel_mod)
-      - MADC (amplitude normalization)
-      - CSR (complementary enhancement)
+      1. DegradationDescriptor extracts 6D fingerprint
+      2. Spatial gate sees: cat_feat (2C) + deg_feat (1) → per-pixel weights
+      3. Quality scalars modulate per-modality confidence
+      4. Channel gate (SENet), MADC, CSR (from v1, proven effective)
 
-    Key: quality_channel_modulation conditions the channel gate output,
-         so each channel's fusion weight is degradation-informed.
+    Degradation-augmented spatial gate:
+      - concat(cat_feat, deg_feat_broadcast) as input
+      - deg_feat = 6D → Linear(8) → ReLU → Linear(1) as spatial bias
+      - GW + Degradation signal = per-pixel weights that know about global quality
     """
 
     def __init__(self, dim=768, reduction=16, da_mode='channel',
@@ -98,18 +102,29 @@ class DaFusionV2(nn.Module):
         self.use_madc = use_madc
         self.use_csr = use_csr
 
-        # ===== 1. Degradation descriptor (6D → 2 + 2C) =====
-        self.deg_desc = DegradationDescriptor(dim=dim)
+        # ===== 1. Degradation descriptor (6D → 2 quality scalars) =====
+        self.deg_desc = DegradationDescriptor()
 
-        # ===== 2. Spatial gate (same) =====
+        # ===== 2. Degradation projection → spatial gate bias =====
+        # Projects 6D fingerprint → 1D spatial bias → broadcast to (H,W)
+        self.deg_spatial_proj = nn.Sequential(
+            nn.Linear(6, 8),
+            nn.ReLU(inplace=True),
+            nn.Linear(8, 1),
+        )
+        nn.init.zeros_(self.deg_spatial_proj[-1].weight)
+        nn.init.zeros_(self.deg_spatial_proj[-1].bias)
+
+        # ===== 3. Degradation-augmented spatial gate =====
+        # Input: cat_feat (2C) + deg_feat (1 concat) = 2C+1
         self.spatial_gate = nn.Sequential(
-            nn.Conv2d(dim * 2, rdim, kernel_size=1, padding=0, bias=False),
+            nn.Conv2d(dim * 2 + 1, rdim, kernel_size=1, padding=0, bias=False),
             nn.BatchNorm2d(rdim),
             nn.ReLU(inplace=True),
             nn.Conv2d(rdim, 2, kernel_size=1, padding=0, bias=True),
         )
 
-        # ===== 3. Channel gate (SENet-style) =====
+        # ===== 4. Channel gate =====
         if da_mode == 'channel':
             self.channel_gate = nn.Sequential(
                 nn.Conv2d(dim * 2, rdim, kernel_size=1, padding=0, bias=True),
@@ -119,7 +134,7 @@ class DaFusionV2(nn.Module):
             nn.init.zeros_(self.channel_gate[-1].weight)
             nn.init.zeros_(self.channel_gate[-1].bias)
 
-        # ===== 4. CSR =====
+        # ===== 5. CSR =====
         if use_csr:
             rdim_csr = max(dim // reduction, 16)
             self.comp_reduce = nn.Conv2d(dim, rdim_csr, kernel_size=1, bias=True)
@@ -127,52 +142,56 @@ class DaFusionV2(nn.Module):
             nn.init.zeros_(self.comp_channel.weight)
             nn.init.zeros_(self.comp_channel.bias)
 
-        desc_p = sum(p.numel() for p in self.deg_desc.parameters())
         total = sum(p.numel() for p in self.parameters())
-        print(f"  [DaFusionV2-QC] Desc={desc_p/1e3:.1f}K, total={total/1e3:.1f}K")
+        print(f"  [DaFusionV2-DGF] Deg-in-spatial, total={total/1e3:.1f}K")
 
     def forward(self, feat_rgb, feat_tir, quality_hint=None):
         B, C, H, W = feat_rgb.shape
-        cat_feat = torch.cat([feat_rgb, feat_tir], dim=1)
+        cat_feat = torch.cat([feat_rgb, feat_tir], dim=1)  # (B, 2C, H, W)
         pooled = cat_feat.mean(dim=[2, 3], keepdim=True)
 
-        # (1) Degradation → quality scalars + per-channel modulation
-        quality, ch_mod = self.deg_desc(feat_rgb, feat_tir)
+        # (1) Degradation → quality scalars
+        quality, _ = self.deg_desc(feat_rgb, feat_tir) if hasattr(self.deg_desc, 'channel_net') \
+                     else (self.deg_desc(feat_rgb, feat_tir), None)
         if quality_hint is not None:
             quality = quality * quality_hint
-
         q_rgb = quality[:, 0:1].unsqueeze(-1).unsqueeze(-1)
         q_tir = quality[:, 1:2].unsqueeze(-1).unsqueeze(-1)
 
-        # (2) Spatial gate
-        s = torch.sigmoid(self.spatial_gate(cat_feat))
+        # (2) Degradation → spatial bias
+        desc = self.deg_desc.compute_fingerprint(feat_rgb, feat_tir)  # (B, 6)
+        deg_bias = self.deg_spatial_proj(desc)  # (B, 1)
+        deg_bias = deg_bias.unsqueeze(-1).unsqueeze(-1)  # (B, 1, 1, 1)
+        deg_bias = torch.tanh(deg_bias) * 0.5  # [-0.5, 0.5]
+
+        # (3) Degradation-augmented spatial gate
+        deg_map = deg_bias.expand(-1, -1, H, W)  # (B, 1, H, W)
+        gate_input = torch.cat([cat_feat, deg_map], dim=1)  # (B, 2C+1, H, W)
+        s = torch.sigmoid(self.spatial_gate(gate_input))
         s_rgb, s_tir = s[:, 0:1], s[:, 1:2]
 
-        # (3) MADC
+        # (4) MADC
         if self.use_madc:
             mag_rgb = feat_rgb.abs().mean(dim=[1,2,3], keepdim=True) + 1e-6
             mag_tir = feat_tir.abs().mean(dim=[1,2,3], keepdim=True) + 1e-6
             s_rgb = s_rgb * (1.0 / mag_rgb).pow(0.5)
             s_tir = s_tir * (1.0 / mag_tir).pow(0.5)
 
-        # (4) Fusion weights = quality × spatial
+        # (5) Fusion weights = quality × spatial
         w_rgb = s_rgb * q_rgb
         w_tir = s_tir * q_tir
 
-        # (5) Channel modulation (degradation-conditioned)
+        # (6) Channel modulation
         if self.da_mode == 'channel':
-            base_c = torch.sigmoid(self.channel_gate(pooled))  # (B, 2C, 1, 1)
-            # Apply per-channel quality modulation
-            ch_mod = ch_mod.unsqueeze(-1).unsqueeze(-1)        # (B, 2C, 1, 1)
-            adapted_c = torch.clamp(base_c + ch_mod, 0.0, 1.0) # modulated channel weights
-            w_rgb = w_rgb * adapted_c[:, :C]
-            w_tir = w_tir * adapted_c[:, C:]
+            c = torch.sigmoid(self.channel_gate(pooled))
+            w_rgb = w_rgb * c[:, :C]
+            w_tir = w_tir * c[:, C:]
 
-        # (6) Normalize & fuse
+        # (7) Normalize & fuse
         total = w_rgb + w_tir + 1e-8
         fused = feat_rgb * (w_rgb / total) + feat_tir * (w_tir / total)
 
-        # (7) CSR
+        # (8) CSR
         if self.use_csr:
             feat_diff = feat_rgb - feat_tir
             diff_feat = F.relu(self.comp_reduce(feat_diff))
