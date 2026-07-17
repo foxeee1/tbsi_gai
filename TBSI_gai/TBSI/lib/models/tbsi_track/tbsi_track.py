@@ -381,11 +381,13 @@ def build_tbsi_track(cfg, training=True):
 
     if cfg.MODEL.BACKBONE.TYPE == 'vit_base_patch16_224_tbsi':
         da_in_layer = getattr(cfg.MODEL, "DA_IN_LAYER", False)
+        use_dgs = getattr(cfg.MODEL, "DGSFUSION", False)
         use_checkpoint = getattr(cfg.TRAIN, "USE_CHECKPOINT", False)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
                                             da_in_layer=da_in_layer,
+                                            use_dgs=use_dgs,
                                             use_checkpoint=use_checkpoint)
     else:
         raise NotImplementedError

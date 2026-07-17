@@ -1,28 +1,16 @@
 """
-DaFusion v2 — True Degradation-Aware Fusion Module (Lightweight)
+DaFusion v2 — True Degradation-Aware Fusion Module
 
-Design philosophy (from authoritative reference guide):
-  1. Information bottleneck (SENet):  6D descriptor → 8D hidden → 2D quality
-  2. Multi-dim decomposition (CBAM): spatial + channel + degradation dims
-  3. Zero-init (Fixup/LayerScale): stable training from identity
+Design:
+  1. DegradationDescriptor (6D → per-channel quality vector)
+  2. Per-modality quality scalars (6D → 2: global modality confidence)
+  3. Per-channel quality modulation (6D → 2*C: channel-level modality trust)
+  4. Quality modulates both spatial & channel gates
 
-v1 root cause fixed:
-  quality_conv used cat_feat.mean(dim=[2,3]) — global avg pooling
-  → Can't distinguish low-light from thermal-cross from motion blur
-  → ViT LayerNorm normalizes activations, so mean pooling loses all signal
-
-v2 approach: 6D degradation fingerprint from per-modality statistics
-  - mean: overall intensity level
-  - std: texture richness (low in blur/degradation)
-  - diff_mean: modality disagreement (high in thermal-cross)
-  - bias: channel-wise offset (high when modalities systematically differ)
-
-  Low-light:  rgb_mean↓, rgb_std↓, diff_mean ≈ normal
-  Thermal-X:  tir_std↓, diff_mean↑, bias↑
-  Motion blur: both std↓, both mean ≈ normal
-  Background clutter: diff_mean↑ (localized modality disagreement)
-
-Params: 74 (vs v1 quality_conv 73.9K — 1000x reduction, more expressive)
+Key differences from v2-Lite:
+  - Quality outputs: (B,2) scalars + (B,2*C) per-channel weights
+  - quality_proj(6D → 8 → 2*C) conditions channel_gate output
+  - More expressive degradation→fusion pathway (~12K params)
 """
 
 import torch
@@ -32,22 +20,36 @@ import torch.nn.functional as F
 
 class DegradationDescriptor(nn.Module):
     """
-    6D degradation fingerprint → 2D per-modality quality score.
-    Input:  (B, 6) statistics: [rgb_mean, rgb_std, tir_mean, tir_std, diff_mean, bias]
-    Output: (B, 2) quality:    [q_rgb, q_tir] in [0, 1]
-    Params: 74
+    6D degradation fingerprint:
+      [rgb_mean, rgb_std, tir_mean, tir_std, diff_mean, bias]
+
+    Outputs:
+      quality:      (B, 2)    — per-modality global quality scalars
+      channel_mod:  (B, 2*C)  — per-channel modality trust weights
+
+    Params: ~12K (6→8→2 + 6→8→2*C)
     """
-    def __init__(self):
+    def __init__(self, dim=768):
         super().__init__()
-        self.predictor = nn.Sequential(
+        # Global quality scalars (proven in v2-Lite)
+        self.quality_net = nn.Sequential(
             nn.Linear(6, 8),
             nn.ReLU(inplace=True),
             nn.Linear(8, 2),
         )
-        nn.init.zeros_(self.predictor[-1].weight)
-        nn.init.zeros_(self.predictor[-1].bias)
+        # Per-channel quality modulation (NEW)
+        self.channel_net = nn.Sequential(
+            nn.Linear(6, 8),
+            nn.ReLU(inplace=True),
+            nn.Linear(8, dim * 2),
+        )
+        nn.init.zeros_(self.quality_net[-1].weight)
+        nn.init.zeros_(self.quality_net[-1].bias)
+        nn.init.zeros_(self.channel_net[-1].weight)
+        nn.init.zeros_(self.channel_net[-1].bias)
 
-    def forward(self, rgb_feat: torch.Tensor, tir_feat: torch.Tensor):
+    def compute_fingerprint(self, rgb_feat, tir_feat):
+        """Extract 6D degradation fingerprint."""
         B, C, H, W = rgb_feat.shape
         rgb_mean = rgb_feat.mean(dim=[2, 3])
         rgb_std = rgb_feat.std(dim=[2, 3])
@@ -64,18 +66,28 @@ class DegradationDescriptor(nn.Module):
             diff_mean.mean(dim=1),
             (rgb_mean - tir_mean).abs().mean(dim=1),
         ], dim=1)
-        return torch.sigmoid(self.predictor(desc))
+        return desc
+
+    def forward(self, rgb_feat, tir_feat):
+        desc = self.compute_fingerprint(rgb_feat, tir_feat)
+        quality = torch.sigmoid(self.quality_net(desc))
+        channel_mod = torch.tanh(self.channel_net(desc)) * 0.1  # [-0.1, 0.1]
+        return quality, channel_mod
 
 
 class DaFusionV2(nn.Module):
     """
-    Degradation-Aware Fusion v2 — Lightweight.
+    Degradation-Aware Fusion v2 — with per-channel quality modulation.
 
-    Replaces v1 quality_conv (73.9K, global pool + 2×Conv1x1)
-      → DegradationDescriptor (74 params, 6D fingerprint + MLP)
+    Architecture:
+      - DegradationDescriptor (6D → 2 scalars + 2C channel weights)
+      - spatial_gate (1×1 conv + BN + ReLU + 1×1 conv)
+      - channel_gate (SENet-style, conditioned by quality channel_mod)
+      - MADC (amplitude normalization)
+      - CSR (complementary enhancement)
 
-    Keeps v1's proven components: spatial_gate, channel_gate, MADC, CSR.
-    Removes over-engineered prototype routing (was 113K, overfit on 25 seqs).
+    Key: quality_channel_modulation conditions the channel gate output,
+         so each channel's fusion weight is degradation-informed.
     """
 
     def __init__(self, dim=768, reduction=16, da_mode='channel',
@@ -86,10 +98,10 @@ class DaFusionV2(nn.Module):
         self.use_madc = use_madc
         self.use_csr = use_csr
 
-        # ===== 1. Lightweight degradation descriptor (74 params) =====
-        self.quality_descriptor = DegradationDescriptor()
+        # ===== 1. Degradation descriptor (6D → 2 + 2C) =====
+        self.deg_desc = DegradationDescriptor(dim=dim)
 
-        # ===== 2. Base spatial gate (same as v1) =====
+        # ===== 2. Spatial gate (same) =====
         self.spatial_gate = nn.Sequential(
             nn.Conv2d(dim * 2, rdim, kernel_size=1, padding=0, bias=False),
             nn.BatchNorm2d(rdim),
@@ -97,7 +109,7 @@ class DaFusionV2(nn.Module):
             nn.Conv2d(rdim, 2, kernel_size=1, padding=0, bias=True),
         )
 
-        # ===== 3. Base channel gate (same as v1) =====
+        # ===== 3. Channel gate (SENet-style) =====
         if da_mode == 'channel':
             self.channel_gate = nn.Sequential(
                 nn.Conv2d(dim * 2, rdim, kernel_size=1, padding=0, bias=True),
@@ -107,7 +119,7 @@ class DaFusionV2(nn.Module):
             nn.init.zeros_(self.channel_gate[-1].weight)
             nn.init.zeros_(self.channel_gate[-1].bias)
 
-        # ===== 4. CSR (same as v1) =====
+        # ===== 4. CSR =====
         if use_csr:
             rdim_csr = max(dim // reduction, 16)
             self.comp_reduce = nn.Conv2d(dim, rdim_csr, kernel_size=1, bias=True)
@@ -115,18 +127,17 @@ class DaFusionV2(nn.Module):
             nn.init.zeros_(self.comp_channel.weight)
             nn.init.zeros_(self.comp_channel.bias)
 
+        desc_p = sum(p.numel() for p in self.deg_desc.parameters())
         total = sum(p.numel() for p in self.parameters())
-        desc_p = sum(p.numel() for p in self.quality_descriptor.parameters())
-        print(f"  [DaFusionV2-Lite] Desc={desc_p/1e3:.2f}K, total={total/1e3:.1f}K")
+        print(f"  [DaFusionV2-QC] Desc={desc_p/1e3:.1f}K, total={total/1e3:.1f}K")
 
-    def forward(self, feat_rgb: torch.Tensor, feat_tir: torch.Tensor,
-                quality_hint: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, feat_rgb, feat_tir, quality_hint=None):
         B, C, H, W = feat_rgb.shape
         cat_feat = torch.cat([feat_rgb, feat_tir], dim=1)
         pooled = cat_feat.mean(dim=[2, 3], keepdim=True)
 
-        # (1) Degradation-aware quality
-        quality = self.quality_descriptor(feat_rgb, feat_tir)
+        # (1) Degradation → quality scalars + per-channel modulation
+        quality, ch_mod = self.deg_desc(feat_rgb, feat_tir)
         if quality_hint is not None:
             quality = quality * quality_hint
 
@@ -148,11 +159,14 @@ class DaFusionV2(nn.Module):
         w_rgb = s_rgb * q_rgb
         w_tir = s_tir * q_tir
 
-        # (5) Channel modulation
+        # (5) Channel modulation (degradation-conditioned)
         if self.da_mode == 'channel':
-            c = torch.sigmoid(self.channel_gate(pooled))
-            w_rgb = w_rgb * c[:, :C]
-            w_tir = w_tir * c[:, C:]
+            base_c = torch.sigmoid(self.channel_gate(pooled))  # (B, 2C, 1, 1)
+            # Apply per-channel quality modulation
+            ch_mod = ch_mod.unsqueeze(-1).unsqueeze(-1)        # (B, 2C, 1, 1)
+            adapted_c = torch.clamp(base_c + ch_mod, 0.0, 1.0) # modulated channel weights
+            w_rgb = w_rgb * adapted_c[:, :C]
+            w_tir = w_tir * adapted_c[:, C:]
 
         # (6) Normalize & fuse
         total = w_rgb + w_tir + 1e-8
