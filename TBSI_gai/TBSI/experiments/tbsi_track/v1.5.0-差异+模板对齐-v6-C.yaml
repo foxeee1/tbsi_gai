@@ -1,0 +1,95 @@
+# ==============================================================================
+# [MiniC验证] DGSFusion v6: 跨模态差异 + 模板对齐 (Route A)
+# ==============================================================================
+# 仅保留:
+#   Dim 2 — 跨模态差异: Linear(768→16) + LN + GELU (继承 v4, 已验证有效)
+#   Dim 3 — 模板对齐: search@temp 相似度分布 → vote(8→2), 每个模态独立
+#     search_proj/temp_proj: RGB/TIR 共享语义空间
+#     相似度分布特征: 排序→8组均值+max→Linear(9→8)→vote(8→2)
+#   Per-token 3-way softmax 路由: diff, talign_rgb, talign_tir
+#   放弃 Dim 1 (自质量): v5 实验证明 768→8 从语义特征学不动
+#   ~25K 参数
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - MiniLasHeRC_train      # MiniC set
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 3000
+  VAL:
+    DATASETS_NAME:
+      - MiniLasHeR_val      # 5 seqs from test set, no overlap with training
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 1000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  DGSFUSION: True
+  DGS_MODE: "v6"            # v6: 跨模态差异 + 模板对齐
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.5
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 4
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 10
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 5
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 2
+  SAVE_EPOCHS: [15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128

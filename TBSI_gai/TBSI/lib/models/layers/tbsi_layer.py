@@ -5,7 +5,8 @@ Supports DGSFusion — multiple router modes:
   v2: DivergenceRouterV2 — 6D→2, free α ∈ (0,1), qm=α (v2-free, ~14 params)
   v3: CrossAttnConfidence — attention entropy, 0 params (v3-attnent)
   v4: DiffProjRouter — learnable diff projection Linear(768→16) (v4-diffproj, ~12K params)
-"""
+  v5: SelfQualityRouter — 自质量 (768→8) + 跨模态差异 (768→16) + per-token 4-way路由 (~25K params)
+  v6: DiffTemplateRouter — 跨模态差异 + 模板对齐 search@temp + per-token 3-way路由 (~25K params)"""
 import math
 import torch
 import torch.nn as nn
@@ -144,6 +145,165 @@ class DiffProjRouter(nn.Module):
         return α
 
 
+class SelfQualityRouter(nn.Module):
+    """
+    DGSFusion v5: 自质量 (Self-Quality) + 跨模态差异 (Cross-modal Diff).
+
+    在 v4 基础上叠加自质量估计:
+      Dim 1 — 自质量: 每个模态独立判断"自己好不好"
+        quality_rgb/tir: Linear(768→8), vote: Linear(8→2)
+      Dim 2 — 跨模态差异: 继承 v4 的 DiffProjRouter
+
+    3 个 vote (rgb_self, tir_self, cross_diff) 通过 per-token 4-way softmax 路由加权.
+      w[..., 3] = abstain: 所有信号都不可信时的退路.
+
+    ~25K params: 3×Linear(768→8/16) + 3×vote + per-token router(32→8→4).
+    """
+    def __init__(self, dim=768):
+        super().__init__()
+        # Dim 1a: RGB 自质量
+        self.quality_rgb = nn.Linear(dim, 8)
+        self.vote_rgb = nn.Linear(8, 2)
+
+        # Dim 1b: TIR 自质量
+        self.quality_tir = nn.Linear(dim, 8)
+        self.vote_tir = nn.Linear(8, 2)
+
+        # Dim 2: 跨模态差异 (继承 v4)
+        self.diff_proj = nn.Sequential(
+            nn.Linear(dim, 16),
+            nn.LayerNorm(16),
+            nn.GELU(),
+        )
+        self.vote_diff = nn.Linear(16, 2)
+
+        # Per-token 路由器: bottleneck 层特征 → 4-way softmax (含 abstain)
+        self.router = nn.Sequential(
+            nn.Linear(32, 8),
+            nn.ReLU(),
+            nn.Linear(8, 4),
+        )
+
+        # 零初始化全部
+        for m in [self.quality_rgb, self.quality_tir, self.diff_proj[0],
+                  self.vote_rgb, self.vote_tir, self.vote_diff,
+                  self.router[0], self.router[2]]:
+            nn.init.zeros_(m.weight)
+            nn.init.zeros_(m.bias)
+
+    def forward(self, x_v_search, x_i_search):
+        # Dim 1: 自质量
+        q_rgb = self.quality_rgb(x_v_search)                       # (B,N,8)
+        q_tir = self.quality_tir(x_i_search)                       # (B,N,8)
+        α_vote_rgb = self.vote_rgb(q_rgb)                          # (B,N,2)
+        α_vote_tir = self.vote_tir(q_tir)                          # (B,N,2)
+
+        # Dim 2: 跨模态差异
+        d_cross = self.diff_proj(x_v_search - x_i_search)          # (B,N,16)
+        α_vote_diff = self.vote_diff(d_cross)                      # (B,N,2)
+
+        # Per-token 路由 (bottleneck 层, 不是 vote 层)
+        router_feat = torch.cat([q_rgb, q_tir, d_cross], dim=-1)   # (B,N,32)
+        w = F.softmax(self.router(router_feat), dim=-1)            # (B,N,4)
+        # w[..., 0:3] = 3个vote的权重, w[..., 3] = abstain
+
+        # 加权融合
+        α = (w[..., 0:1] * α_vote_rgb +
+             w[..., 1:2] * α_vote_tir +
+             w[..., 2:3] * α_vote_diff)                            # (B,N,2)
+        # abstain 时加权投票残差自然退火
+
+        return torch.sigmoid(α)
+
+
+class DiffTemplateRouter(nn.Module):
+    """
+    DGSFusion v6: 跨模态差异 (DiffProj) + 模板对齐 (Template Alignment).
+
+    Dim 2 — 跨模态差异: 继承 v4 的 diff_proj(768→16) → vote_diff(16→2)
+    Dim 3 — 模板对齐: search token 与 template token 的相似度分布
+      search_proj & temp_proj: 共享语义空间 (RGB/TIR 共用)
+      similarity: bmm(search_proj, temp_proj^T) → 排序分组池化(8) + max(1) → encode(9→8) → vote(8→2)
+
+    3 个 vote (diff, talign_rgb, talign_tir) 通过 per-token 3-way softmax 路由加权.
+
+    ~25K params: diff(12.3K) + temp_align(12.4K) + router(0.3K).
+    """
+    def __init__(self, dim=768):
+        super().__init__()
+
+        # === Dim 2: 跨模态差异 (继承 v4) ===
+        self.diff_proj = nn.Sequential(
+            nn.Linear(dim, 16),
+            nn.LayerNorm(16),
+            nn.GELU(),
+        )
+        self.vote_diff = nn.Linear(16, 2)
+
+        # === Dim 3: 模板对齐 (共享语义空间) ===
+        self.search_proj = nn.Linear(dim, 8)  # RGB/TIR 共享
+        self.temp_proj = nn.Linear(dim, 8)    # RGB/TIR 共享
+        self.talign_enc = nn.Linear(9, 8)     # 分布编码: 8组池化 + max(1) → 8
+        self.vote_talign_rgb = nn.Linear(8, 2)
+        self.vote_talign_tir = nn.Linear(8, 2)
+
+        # === Per-token 路由 (bottleneck 层) ===
+        self.router = nn.Sequential(
+            nn.Linear(32, 8),
+            nn.ReLU(),
+            nn.Linear(8, 3),   # 3-way: diff, talign_rgb, talign_tir
+        )
+
+        # 零初始化全部
+        for m in [self.diff_proj[0], self.vote_diff,
+                  self.search_proj, self.temp_proj, self.talign_enc,
+                  self.vote_talign_rgb, self.vote_talign_tir,
+                  self.router[0], self.router[2]]:
+            nn.init.zeros_(m.weight)
+            nn.init.zeros_(m.bias)
+
+    def forward(self, x_v_search, x_i_search, x_v_temp, x_i_temp):
+        # === Dim 2: 跨模态差异 ===
+        d_cross = self.diff_proj(x_v_search - x_i_search)               # (B,N,16)
+        α_vote_diff = self.vote_diff(d_cross)                           # (B,N,2)
+
+        # === Dim 3: 模板对齐 (共享语义空间) ===
+        T = x_v_temp.shape[1]  # template length (e.g. 64)
+
+        s_rgb = F.gelu(self.search_proj(x_v_search))                    # (B,N,8)
+        t_rgb = F.gelu(self.temp_proj(x_v_temp))                        # (B,T,8)
+        sim_rgb = torch.bmm(s_rgb, t_rgb.transpose(1, 2))               # (B,N,T)
+
+        s_tir = F.gelu(self.search_proj(x_i_search))
+        t_tir = F.gelu(self.temp_proj(x_i_temp))
+        sim_tir = torch.bmm(s_tir, t_tir.transpose(1, 2))               # (B,N,T)
+
+        # 相似度分布特征: 排序 → 8组均值 + 最大值 (order-independent)
+        def _talign_feat(sim):
+            sim_sorted = sim.sort(dim=-1, descending=True).values        # (B,N,T)
+            Bp, Np, _ = sim_sorted.shape
+            sim_grouped = sim_sorted.reshape(Bp, Np, T // 8, 8).mean(dim=-1)  # (B,N,8)
+            sim_max = sim_sorted[:, :, 0:1]                              # (B,N,1)
+            return F.gelu(self.talign_enc(
+                torch.cat([sim_grouped, sim_max], dim=-1)))              # (B,N,8)
+
+        talign_rgb = _talign_feat(sim_rgb)                               # (B,N,8)
+        talign_tir = _talign_feat(sim_tir)
+
+        α_vote_talign_rgb = self.vote_talign_rgb(talign_rgb)            # (B,N,2)
+        α_vote_talign_tir = self.vote_talign_tir(talign_tir)            # (B,N,2)
+
+        # === Per-token 路由 (bottleneck 层) ===
+        router_feat = torch.cat([d_cross, talign_rgb, talign_tir], dim=-1)  # (B,N,32)
+        w = F.softmax(self.router(router_feat), dim=-1)                  # (B,N,3)
+
+        α = (w[:, :, 0:1] * α_vote_diff +
+             w[:, :, 1:2] * α_vote_talign_rgb +
+             w[:, :, 2:3] * α_vote_talign_tir)                          # (B,N,2)
+
+        return torch.sigmoid(α)
+
+
 class DegradationModulator(nn.Module):
     """Joint modality confidence estimator (kept for backward compat)."""
     def __init__(self, dim, reduction=4, temporal_dim=None):
@@ -218,6 +378,10 @@ class TBSILayer(nn.Module):
                 self.dgs_router = CrossAttnConfidence()
             elif dgs_mode == "v4":
                 self.dgs_router = DiffProjRouter(dim)
+            elif dgs_mode == "v5":
+                self.dgs_router = SelfQualityRouter(dim)
+            elif dgs_mode == "v6":
+                self.dgs_router = DiffTemplateRouter(dim)
             else:
                 raise ValueError(f"Unknown DGS_MODE: {dgs_mode}")
             rp = sum(p.numel() for p in self.dgs_router.parameters())
@@ -233,7 +397,11 @@ class TBSILayer(nn.Module):
         # ===== Compute per-token quality masks (for CASTBlocks) =====
         qm_v = qm_i = None
         if self.use_dgs:
-            α = self.dgs_router(x_v_orig, x_i_orig)  # (B, N_s, 1) for v1, (B, N_s, 2) for v2-v4
+            if self.dgs_mode == "v6":
+                α = self.dgs_router(x_v_orig, x_i_orig,
+                                    x_v[:, :lens_z, :], x_i[:, :lens_z, :])
+            else:
+                α = self.dgs_router(x_v_orig, x_i_orig)  # (B, N_s, 1) for v1, (B, N_s, 2) for v2-v5
             if self.dgs_mode == "v1":
                 # v1: quality mask from hardcoded α range
                 qm_v = (α - 0.3).sigmoid().clamp(0.1, 0.9) / 0.8
