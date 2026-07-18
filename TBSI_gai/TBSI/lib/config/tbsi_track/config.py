@@ -53,6 +53,7 @@ cfg.MODEL.DA_FUSION_MODE = "residual"
 cfg.MODEL.DA_FUSION_SCALE = 0.5
 cfg.MODEL.DA_IN_LAYER = False  # Per-layer degradation-aware cross-attention modulation
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
+cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影)
 
 # MODEL.HEAD
 cfg.MODEL.HEAD = edict()

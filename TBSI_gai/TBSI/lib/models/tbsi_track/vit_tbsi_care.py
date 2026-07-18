@@ -117,7 +117,7 @@ class VisionTransformerTBSI(BaseBackbone):
                  act_layer=None, weight_init='',
                  tbsi_loc=None, tbsi_drop_path=None,
                  da_in_layer=False, use_attn_gate=False,
-                 use_dgs=False, use_checkpoint=False):
+                 use_dgs=False, dgs_mode="v1", use_checkpoint=False):
         """
         Args:
             img_size (int, tuple): input image size
@@ -174,7 +174,7 @@ class VisionTransformerTBSI(BaseBackbone):
             for i in range(len(self.tbsi_loc)):
                 self.tbsi_layers.append(TBSILayer(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
                 attn_drop=attn_drop_rate, drop_path=self.tbsi_drop_path[i], norm_layer=norm_layer, act_layer=act_layer,
-                use_degradation=da_in_layer, use_attn_gate=use_attn_gate, use_dgs=use_dgs))
+                use_degradation=da_in_layer, use_attn_gate=use_attn_gate, use_dgs=use_dgs, dgs_mode=dgs_mode))
 
         self.init_weights(weight_init)
 
