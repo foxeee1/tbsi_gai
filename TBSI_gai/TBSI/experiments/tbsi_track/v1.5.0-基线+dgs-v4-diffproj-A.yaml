@@ -45,7 +45,7 @@ DATA:
     SAMPLE_PER_EPOCH: 3000
   VAL:
     DATASETS_NAME:
-      - MiniLasHeRA_train      # MiniA set
+      - MiniLasHeR_val      # 5 seqs from test set, no overlap with training
     DATASETS_RATIO:
       - 1
     SAMPLE_PER_EPOCH: 1000

@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data.distributed import DistributedSampler
 # datasets related
-from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR, MiniLasHeR, MiniLasHeRA, MiniLasHeRB, MiniLasHeRC
+from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR, MiniLasHeR, MiniLasHeRA, MiniLasHeRB, MiniLasHeRC, MiniLasHeRVal
 from lib.train.dataset import Lasot_lmdb, Got10k_lmdb, MSCOCOSeq_lmdb, ImagenetVID_lmdb, TrackingNet_lmdb
 from lib.train.data import sampler, opencv_loader, processing, LTRLoader
 import lib.train.data.transforms as tfm
@@ -33,7 +33,8 @@ def names2datasets(name_list: list, settings, image_loader):
         assert name in ["LASOT", "GOT10K_vottrain", "GOT10K_votval", "GOT10K_train_full", "GOT10K_official_val",
                         "COCO17", "VID", "TRACKINGNET", "LasHeR_train", "LasHeR_test",
                         "MiniLasHeR_train", "MiniLasHeR_test",
-                        "MiniLasHeRA_train", "MiniLasHeRB_train", "MiniLasHeRC_train"]
+                        "MiniLasHeRA_train", "MiniLasHeRB_train", "MiniLasHeRC_train",
+                        "MiniLasHeR_val"]
         if name == "LASOT":
             if settings.use_lmdb:
                 print("Building lasot dataset from lmdb")
@@ -99,6 +100,9 @@ def names2datasets(name_list: list, settings, image_loader):
             datasets.append(MiniLasHeRB(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
         if name == "MiniLasHeRC_train":
             datasets.append(MiniLasHeRC(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
+        # MiniLasHeR validation set: 5 seqs from test set, NO overlap with A/B/C training
+        if name == "MiniLasHeR_val":
+            datasets.append(MiniLasHeRVal(image_loader=image_loader))
 
     return datasets
 

@@ -58,7 +58,7 @@ DATA:
     SAMPLE_PER_EPOCH: 3000    # 完整 LasHeR 是 60000
   VAL:
     DATASETS_NAME:
-      - MiniLasHeRA_train      # same 30-seq subset for validation loss tracking
+      - MiniLasHeR_val      # 5 seqs from test set, no overlap with training
     DATASETS_RATIO:
       - 1
     SAMPLE_PER_EPOCH: 1000    # mini validation samples

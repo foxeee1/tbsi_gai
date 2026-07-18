@@ -127,6 +127,20 @@ MINI_TEST_SEQUENCES = [
     "boytakingbasketballfollowing",  # 篮球运动
 ]
 
+# =============================================================================
+# MiniLasHeR Validation Sequences: 5 from LasHeR test set, 1 per category.
+# 与 A/B/C 训练集 (LasHeR training set) 完全无重叠。
+# =============================================================================
+# 选择原则: 每个类别选 1 条, 避开过易(天花板效应)和过难(地板效应)。
+# =============================================================================
+MINI_VAL_SEQUENCES = [
+    "bike",                    # Normal - 中等难度, ~75 AUC
+    "belowdarkgirl",           # Illumination - 暗光场景, ~68 AUC
+    "ab_whiteboywithbluebag",  # ThermalCross - IR退化, ~27 AUC
+    "boyaftertree",            # Occlusion - 树后穿过, ~67 AUC
+    "runningcameragirl",       # FastMotion - 跟拍奔跑, ~34 AUC
+]
+
 # Total training frames: ~22,300
 # Total test frames: ~18,000
 
@@ -219,3 +233,13 @@ class MiniLasHeRC(MiniLasHeR):
     """MiniLasHeR set C — stratified sampling matching LasHeR distribution."""
     def __init__(self, *args, **kwargs):
         super().__init__(mini_sequences=ALL_MINI_SETS['MiniC'], *args, **kwargs)
+
+
+class MiniLasHeRVal(MiniLasHeR):
+    """
+    MiniLasHeR validation set — 5 seqs from test set, NO overlap with A/B/C training.
+    与训练集来自不同 LasHeR 分区 (testingset vs trainingset), 确保泛化信号真实。
+    """
+    def __init__(self, root=None, image_loader=None, split=None, seq_ids=None, data_fraction=None):
+        super().__init__(root=None, image_loader=image_loader, split='test',
+                         mini_sequences=MINI_VAL_SEQUENCES)
