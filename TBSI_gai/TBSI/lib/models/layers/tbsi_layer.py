@@ -410,13 +410,13 @@ class SignalAwareDecoupler(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(rdim, dim),
             )
-        if mode == "conditional_residual":
+        if mode in ("conditional_residual", "reliability_guided_residual"):
             self.reliability = nn.Sequential(
                 nn.Linear(dim * 4, rdim),
                 nn.ReLU(inplace=True),
                 nn.Linear(rdim, dim),
             )
-        if mode in ("learnable_residual", "conditional_residual"):
+        if mode in ("learnable_residual", "conditional_residual", "reliability_guided_residual"):
             alpha_init = min(max(alpha_init, 1e-4), residual_scale - 1e-4)
             alpha_ratio = alpha_init / residual_scale
             alpha_logit = math.log(alpha_ratio / (1.0 - alpha_ratio))
@@ -434,9 +434,9 @@ class SignalAwareDecoupler(nn.Module):
 
     def forward(self, x, x_rgb=None, x_tir=None, x_search=None):
         logits = self.decouple(x)
-        if self.mode == "conditional_residual":
+        if self.mode in ("conditional_residual", "reliability_guided_residual"):
             if x_rgb is None or x_tir is None or x_search is None:
-                raise ValueError("conditional_residual mode requires x_rgb, x_tir, and x_search inputs")
+                raise ValueError(f"{self.mode} mode requires x_rgb, x_tir, and x_search inputs")
             search_context = x_search.mean(dim=1, keepdim=True).expand_as(x)
             modality_gap = (x_rgb - x_tir).abs()
             reliability_inp = torch.cat([
@@ -447,7 +447,17 @@ class SignalAwareDecoupler(nn.Module):
             ], dim=-1)
             reliability = torch.sigmoid(self.reliability(reliability_inp))
             alpha = self.residual_scale * torch.sigmoid(self.alpha_logit)
-            modulation = alpha * (1.0 - reliability) * torch.tanh(logits)
+            if self.mode == "reliability_guided_residual":
+                modal_agree = F.cosine_similarity(x_rgb, x_tir, dim=-1).unsqueeze(-1)
+                search_agree = F.cosine_similarity(x, search_context, dim=-1).unsqueeze(-1)
+                reliability_prior = 0.5 * (
+                    torch.sigmoid(2.0 * modal_agree) +
+                    torch.sigmoid(2.0 * search_agree)
+                )
+                reliability = 0.5 * reliability + 0.5 * reliability_prior
+                modulation = alpha * reliability * torch.tanh(logits)
+            else:
+                modulation = alpha * (1.0 - reliability) * torch.tanh(logits)
             signal = x * (1.0 + modulation)
             interference = -x * modulation
             return signal, interference
