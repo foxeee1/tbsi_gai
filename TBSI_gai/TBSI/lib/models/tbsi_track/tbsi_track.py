@@ -399,6 +399,8 @@ def build_tbsi_track(cfg, training=True):
         template_search_competition_scale = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_SCALE", 0.20)
         template_search_competition_alpha_init = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_ALPHA_INIT", 0.10)
         template_search_competition_temperature = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_TEMPERATURE", 4.0)
+        use_output_residual_gate = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE", False)
+        output_residual_gate_layers = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE_LAYERS", [])
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -419,7 +421,9 @@ def build_tbsi_track(cfg, training=True):
                                             template_search_competition_layers=template_search_competition_layers,
                                             template_search_competition_scale=template_search_competition_scale,
                                             template_search_competition_alpha_init=template_search_competition_alpha_init,
-                                            template_search_competition_temperature=template_search_competition_temperature)
+                                            template_search_competition_temperature=template_search_competition_temperature,
+                                            use_output_residual_gate=use_output_residual_gate,
+                                            output_residual_gate_layers=output_residual_gate_layers)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -436,6 +440,10 @@ def build_tbsi_track(cfg, training=True):
                   f'(layers={layer_msg}, scale={template_search_competition_scale}, '
                   f'alpha_init={template_search_competition_alpha_init}, '
                   f'temperature={template_search_competition_temperature})')
+        if use_output_residual_gate:
+            layer_msg = "all" if not output_residual_gate_layers else list(output_residual_gate_layers)
+            print(f'  [OutputResidualGate] Delta-level bridge output adapter enabled '
+                  f'(layers={layer_msg})')
     else:
         raise NotImplementedError
 

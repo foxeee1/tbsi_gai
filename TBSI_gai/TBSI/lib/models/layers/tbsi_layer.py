@@ -585,6 +585,43 @@ class TemplateSearchCompetition(nn.Module):
         ], dim=-1)
 
 
+class OutputResidualGate(nn.Module):
+    """
+    Delta-level adapter after TBSI interaction outputs.
+
+    The original CAST output is kept as the base interaction. This module learns
+    only an extra residual from the interaction delta, with zero-init so the
+    initial behavior is exactly the original TBSI bridge output.
+    """
+    def __init__(self, dim=768, reduction=4):
+        super().__init__()
+        rdim = max(dim // reduction, 16)
+        self.adapter = nn.Sequential(
+            nn.Linear(dim, rdim),
+            nn.ReLU(inplace=True),
+            nn.Linear(rdim, dim),
+        )
+        self.gate = nn.Sequential(
+            nn.Linear(dim * 3, rdim),
+            nn.ReLU(inplace=True),
+            nn.Linear(rdim, 1),
+        )
+        self.reset_last_layer()
+
+    def reset_last_layer(self):
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+        nn.init.zeros_(self.gate[-1].weight)
+        nn.init.zeros_(self.gate[-1].bias)
+
+    def forward(self, interaction_out, original_search):
+        delta = interaction_out - original_search
+        gate_inp = torch.cat([interaction_out, delta, delta.abs()], dim=-1)
+        gate = torch.sigmoid(self.gate(gate_inp))
+        residual = self.adapter(delta)
+        return interaction_out + gate * residual, gate.mean(dim=1)
+
+
 class TBSILayer(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, use_degradation=False,
@@ -595,13 +632,15 @@ class TBSILayer(nn.Module):
                  use_template_search_competition=False,
                  template_search_competition_scale=0.20,
                  template_search_competition_alpha_init=0.10,
-                 template_search_competition_temperature=4.0):
+                 template_search_competition_temperature=4.0,
+                 use_output_residual_gate=False):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
         self.use_signal_decouple = use_signal_decouple
         self.use_soft_search_reliability = use_soft_search_reliability
         self.use_template_search_competition = use_template_search_competition
+        self.use_output_residual_gate = use_output_residual_gate
 
         self.t_fusion = nn.Sequential(
             nn.Linear(dim * 2, dim),
@@ -636,6 +675,14 @@ class TBSILayer(nn.Module):
                   f"({rp} params, scale={template_search_competition_scale}, "
                   f"alpha_init={template_search_competition_alpha_init}, "
                   f"temperature={template_search_competition_temperature})")
+
+        if use_output_residual_gate:
+            self.output_residual_gate_v = OutputResidualGate(dim=dim)
+            self.output_residual_gate_i = OutputResidualGate(dim=dim)
+            rp = (sum(p.numel() for p in self.output_residual_gate_v.parameters()) +
+                  sum(p.numel() for p in self.output_residual_gate_i.parameters()))
+            print(f"  [OutputResidualGate] Delta-level bridge output adapter active "
+                  f"({rp} params, zero-init)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
@@ -745,6 +792,12 @@ class TBSILayer(nn.Module):
         temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t_attn, x_i_orig], dim=1),
                                    quality_mask=qm_i)[:, lens_z:, :]
 
+        output_gate_signal = None
+        if self.use_output_residual_gate:
+            temp_x_v, gate_v = self.output_residual_gate_v(temp_x_v, x_v_orig)
+            temp_x_i, gate_i = self.output_residual_gate_i(temp_x_i, x_i_orig)
+            output_gate_signal = torch.cat([gate_v, gate_i], dim=-1)
+
         # ===== Apply routing/gate to combine cross-attn output with original =====
         if self.use_dgs:
             if self.dgs_mode == "v1":
@@ -778,7 +831,7 @@ class TBSILayer(nn.Module):
         else:
             x_v = torch.cat([x_v[:, :lens_z, :], temp_x_v], dim=1)
             x_i = torch.cat([x_i[:, :lens_z, :], temp_x_i], dim=1)
-            q_global = search_quality_signal
+            q_global = output_gate_signal if output_gate_signal is not None else search_quality_signal
 
         # ===== Restore interference for template self-attention (not cross-modal) =====
         if self.use_signal_decouple and fused_t_interference is not None:
