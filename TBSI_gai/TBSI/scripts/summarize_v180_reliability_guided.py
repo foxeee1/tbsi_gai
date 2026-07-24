@@ -16,7 +16,8 @@ DATASET_NAME = "mini_lasher_test"
 OUT_DIR = Path("output/diagnostics/reliability_guided_v180")
 REPORT_NAME = "mini_lasher_test_reliability_guided_v180"
 CATEGORY_FILE = Path("output/diagnostics/signal_decouple/per_sequence_proxy_attr_metrics.json")
-PREVIOUS_SUMMARY_FILE = Path("output/diagnostics/template_search_competition_v172/attr_metrics_v172_compare.json")
+PREVIOUS_SUMMARY_FILE = Path("output/diagnostics/signal_decouple_v165/attr_metrics.json")
+V172_SUMMARY_FILE = Path("output/diagnostics/template_search_competition_v172/attr_metrics_v172_compare.json")
 
 TRACKER_PARAMS = [
     "v1.8.0-reliability-guided-selective-interaction-A",
@@ -74,10 +75,13 @@ def category_delta_mean(deltas):
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     previous = json.load(PREVIOUS_SUMMARY_FILE.open())
+    v172_summary = json.load(V172_SUMMARY_FILE.open())
     categories = json.load(CATEGORY_FILE.open())["categories"]
 
     overall = dict(previous["overall"])
     by_category = dict(previous["by_category"])
+    overall.update(v172_summary["v172_overall"])
+    by_category.update(v172_summary["v172_by_category"])
 
     dataset = get_dataset(DATASET_NAME)
     trackers = []
