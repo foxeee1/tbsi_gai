@@ -1,4 +1,5 @@
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -151,6 +152,32 @@ def main():
     }
     out_path = OUT_DIR / "attribute_sentinel_v181_summary.json"
     json.dump(summary, out_path.open("w"), indent=2, ensure_ascii=False)
+
+    for param in TRACKER_GROUPS["v181_mini"]:
+        exp_log_dir = Path("output") / "experiments" / param / "logs" / "stage1_attribute_sentinel"
+        exp_log_dir.mkdir(parents=True, exist_ok=True)
+        per_exp = {
+            "dataset": DATASET_NAME,
+            "report_name": REPORT_NAME,
+            "config": param,
+            "metrics": tracker_metrics.get(param),
+            "attributes": tracker_attr_metrics.get(param),
+            "group_metrics": group_metrics,
+            "deltas": deltas,
+            "coverage": coverage,
+            "comparability_note": summary["comparability_note"],
+        }
+        json.dump(per_exp, (exp_log_dir / "attribute_sentinel_metrics.json").open("w"),
+                  indent=2, ensure_ascii=False)
+        shutil.copyfile(out_path, exp_log_dir / "attribute_sentinel_v181_summary.json")
+        manifest_copy = exp_log_dir / "attribute_sentinel_manifest.json"
+        if not manifest_copy.exists():
+            shutil.copyfile(MANIFEST_FILE, manifest_copy)
+        list_src = Path("experiments") / "tbsi_track" / "attribute_sentinel_sequences.txt"
+        list_dst = exp_log_dir / "attribute_sentinel_sequences.txt"
+        if list_src.exists() and not list_dst.exists():
+            shutil.copyfile(list_src, list_dst)
+
     print(json.dumps({
         "wrote": str(out_path),
         "group_metrics": group_metrics,

@@ -140,6 +140,12 @@ screening rule by default unless the user explicitly overrides it.
 - Promotion signal: no severe drop on key sentinel attributes, better attribute
   coverage than the parent version, and overall performance competitive with the
   accepted mini/full reference.
+- Diagnostics must be saved under each experiment directory:
+  `output/experiments/<config>/logs/stage1_attribute_sentinel/`.
+  The directory should contain the console log, sentinel sequence list, sentinel
+  manifest, per-experiment metric JSON, and the shared comparison summary copy.
+  A global diagnostics directory may keep shared manifests or aggregate copies,
+  but it must not be the only place where stage results live.
 
 **Stage 2: full evaluation**
 
