@@ -69,6 +69,8 @@ cfg.MODEL.TEMPLATE_SEARCH_COMPETITION_ALPHA_INIT = 0.10  # initial candidate com
 cfg.MODEL.TEMPLATE_SEARCH_COMPETITION_TEMPERATURE = 4.0  # sharpness of template-search candidate scores
 cfg.MODEL.OUTPUT_RESIDUAL_GATE = False  # Delta-level adapter after TBSI interaction outputs
 cfg.MODEL.OUTPUT_RESIDUAL_GATE_LAYERS = []  # TBSI layer indices to enable; empty means all TBSI layers
+cfg.MODEL.OUTPUT_RESIDUAL_GATE_MODE = "naive"  # naive | reliability
+cfg.MODEL.OUTPUT_RESIDUAL_GATE_SCALE = 1.0  # Residual injection scale for the output gate
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 

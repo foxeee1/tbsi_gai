@@ -401,6 +401,8 @@ def build_tbsi_track(cfg, training=True):
         template_search_competition_temperature = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_TEMPERATURE", 4.0)
         use_output_residual_gate = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE", False)
         output_residual_gate_layers = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE_LAYERS", [])
+        output_residual_gate_mode = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE_MODE", "naive")
+        output_residual_gate_scale = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE_SCALE", 1.0)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -423,7 +425,9 @@ def build_tbsi_track(cfg, training=True):
                                             template_search_competition_alpha_init=template_search_competition_alpha_init,
                                             template_search_competition_temperature=template_search_competition_temperature,
                                             use_output_residual_gate=use_output_residual_gate,
-                                            output_residual_gate_layers=output_residual_gate_layers)
+                                            output_residual_gate_layers=output_residual_gate_layers,
+                                            output_residual_gate_mode=output_residual_gate_mode,
+                                            output_residual_gate_scale=output_residual_gate_scale)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -443,7 +447,8 @@ def build_tbsi_track(cfg, training=True):
         if use_output_residual_gate:
             layer_msg = "all" if not output_residual_gate_layers else list(output_residual_gate_layers)
             print(f'  [OutputResidualGate] Delta-level bridge output adapter enabled '
-                  f'(layers={layer_msg})')
+                  f'(layers={layer_msg}, mode={output_residual_gate_mode}, '
+                  f'scale={output_residual_gate_scale})')
     else:
         raise NotImplementedError
 

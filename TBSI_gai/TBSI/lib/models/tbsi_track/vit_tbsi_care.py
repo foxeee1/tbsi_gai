@@ -132,7 +132,9 @@ class VisionTransformerTBSI(BaseBackbone):
                  template_search_competition_alpha_init=0.10,
                  template_search_competition_temperature=4.0,
                  use_output_residual_gate=False,
-                 output_residual_gate_layers=None):
+                 output_residual_gate_layers=None,
+                 output_residual_gate_mode="naive",
+                 output_residual_gate_scale=1.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -225,7 +227,9 @@ class VisionTransformerTBSI(BaseBackbone):
                 template_search_competition_scale=template_search_competition_scale,
                 template_search_competition_alpha_init=template_search_competition_alpha_init,
                 template_search_competition_temperature=template_search_competition_temperature,
-                use_output_residual_gate=use_org_layer))
+                use_output_residual_gate=use_org_layer,
+                output_residual_gate_mode=output_residual_gate_mode,
+                output_residual_gate_scale=output_residual_gate_scale))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()

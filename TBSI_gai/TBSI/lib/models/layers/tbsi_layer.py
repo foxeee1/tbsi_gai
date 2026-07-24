@@ -593,16 +593,19 @@ class OutputResidualGate(nn.Module):
     only an extra residual from the interaction delta, with zero-init so the
     initial behavior is exactly the original TBSI bridge output.
     """
-    def __init__(self, dim=768, reduction=4):
+    def __init__(self, dim=768, reduction=4, mode="naive", residual_scale=1.0):
         super().__init__()
+        self.mode = mode
+        self.residual_scale = residual_scale
         rdim = max(dim // reduction, 16)
         self.adapter = nn.Sequential(
             nn.Linear(dim, rdim),
             nn.ReLU(inplace=True),
             nn.Linear(rdim, dim),
         )
+        gate_dim = dim * 3 if mode == "naive" else dim * 4 + 3
         self.gate = nn.Sequential(
-            nn.Linear(dim * 3, rdim),
+            nn.Linear(gate_dim, rdim),
             nn.ReLU(inplace=True),
             nn.Linear(rdim, 1),
         )
@@ -616,10 +619,23 @@ class OutputResidualGate(nn.Module):
 
     def forward(self, interaction_out, original_search):
         delta = interaction_out - original_search
-        gate_inp = torch.cat([interaction_out, delta, delta.abs()], dim=-1)
+        if self.mode == "reliability":
+            interaction_norm = F.normalize(interaction_out, dim=-1)
+            original_norm = F.normalize(original_search, dim=-1)
+            delta_norm = F.normalize(delta, dim=-1)
+            agreement = F.cosine_similarity(interaction_norm, original_norm, dim=-1).unsqueeze(-1)
+            delta_energy = delta.norm(dim=-1, keepdim=True) / (
+                original_search.norm(dim=-1, keepdim=True) + 1e-6)
+            delta_alignment = F.cosine_similarity(delta_norm, original_norm, dim=-1).unsqueeze(-1)
+            reliability_stats = torch.cat([agreement, delta_energy, delta_alignment], dim=-1)
+            gate_inp = torch.cat([
+                interaction_out, original_search, delta, delta.abs(), reliability_stats
+            ], dim=-1)
+        else:
+            gate_inp = torch.cat([interaction_out, delta, delta.abs()], dim=-1)
         gate = torch.sigmoid(self.gate(gate_inp))
         residual = self.adapter(delta)
-        return interaction_out + gate * residual, gate.mean(dim=1)
+        return interaction_out + self.residual_scale * gate * residual, gate.mean(dim=1)
 
 
 class TBSILayer(nn.Module):
@@ -633,7 +649,9 @@ class TBSILayer(nn.Module):
                  template_search_competition_scale=0.20,
                  template_search_competition_alpha_init=0.10,
                  template_search_competition_temperature=4.0,
-                 use_output_residual_gate=False):
+                 use_output_residual_gate=False,
+                 output_residual_gate_mode="naive",
+                 output_residual_gate_scale=1.0):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -677,12 +695,17 @@ class TBSILayer(nn.Module):
                   f"temperature={template_search_competition_temperature})")
 
         if use_output_residual_gate:
-            self.output_residual_gate_v = OutputResidualGate(dim=dim)
-            self.output_residual_gate_i = OutputResidualGate(dim=dim)
+            self.output_residual_gate_v = OutputResidualGate(
+                dim=dim, mode=output_residual_gate_mode,
+                residual_scale=output_residual_gate_scale)
+            self.output_residual_gate_i = OutputResidualGate(
+                dim=dim, mode=output_residual_gate_mode,
+                residual_scale=output_residual_gate_scale)
             rp = (sum(p.numel() for p in self.output_residual_gate_v.parameters()) +
                   sum(p.numel() for p in self.output_residual_gate_i.parameters()))
             print(f"  [OutputResidualGate] Delta-level bridge output adapter active "
-                  f"({rp} params, zero-init)")
+                  f"({rp} params, mode={output_residual_gate_mode}, "
+                  f"scale={output_residual_gate_scale}, zero-init)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
