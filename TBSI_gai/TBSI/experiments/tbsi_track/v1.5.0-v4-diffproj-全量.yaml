@@ -1,0 +1,92 @@
+# ==============================================================================
+# [全量] DGSFusion v4-diffproj: 跨模态差异投影 (完整 LasHeR 训练)
+# ==============================================================================
+# 基于 v1.0.0-完美基线-全量，仅添加 DGSFUSION:
+#   模型改动: MODEL.DGSFUSION=True, MODEL.DGS_MODE="v4"
+#   其他配置 → 完美基线完全对齐
+#   差异投影: Linear(768→16) + LN + GELU → Linear(16→2) → sigmoid → α_v, α_i
+#   参数: ~12.3K
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - LasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 60000
+  VAL:
+    DATASETS_NAME:
+    - LasHeR_test
+    DATASETS_RATIO:
+    - 1
+    SAMPLE_PER_EPOCH: 10000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  DGSFUSION: True
+  DGS_MODE: "v4"
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.1
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 8
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 50
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 10
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 4
+  SAVE_EPOCHS: [15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128

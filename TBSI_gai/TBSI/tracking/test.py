@@ -2,6 +2,24 @@ import os
 import sys
 import argparse
 
+try:
+    import cv2 as cv
+    cv.setNumThreads(0)
+except Exception:
+    pass
+
+DEFAULT_EVAL_CPU_THREADS = int(os.environ.get('TBSI_TEST_CPU_THREADS', '2'))
+for _name in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+    os.environ[_name] = str(DEFAULT_EVAL_CPU_THREADS)
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+try:
+    import torch
+    torch.set_num_threads(DEFAULT_EVAL_CPU_THREADS)
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
+
 prj_path = os.path.join(os.path.dirname(__file__), '..')
 if prj_path not in sys.path:
     sys.path.append(prj_path)
@@ -42,7 +60,7 @@ def main():
     parser.add_argument('--dataset_name', type=str, default='otb', help='Name of dataset (otb, nfs, uav, tpl, vot, tn, gott, gotv, lasot).')
     parser.add_argument('--sequence', type=str, default=None, help='Sequence number or name.')
     parser.add_argument('--debug', type=int, default=0, help='Debug level.')
-    parser.add_argument('--threads', type=int, default=0, help='Number of threads.')
+    parser.add_argument('--threads', type=int, default=1, help='Number of threads (0/1 = safe sequential mode).')
     parser.add_argument('--num_gpus', type=int, default=8)
 
     args = parser.parse_args()

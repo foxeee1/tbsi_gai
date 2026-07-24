@@ -117,7 +117,20 @@ class VisionTransformerTBSI(BaseBackbone):
                  act_layer=None, weight_init='',
                  tbsi_loc=None, tbsi_drop_path=None,
                  da_in_layer=False, use_attn_gate=False,
-                 use_dgs=False, dgs_mode="v1", use_checkpoint=False):
+                 use_dgs=False, dgs_mode="v1", use_checkpoint=False,
+                 use_signal_decouple=False, signal_decouple_mode="split",
+                 signal_decouple_layers=None, signal_decouple_scale=0.5,
+                 signal_decouple_layer_scales=None,
+                 signal_decouple_alpha_init=0.1,
+                 use_soft_search_reliability=False,
+                 soft_search_reliability_layers=None,
+                 soft_search_reliability_scale=0.25,
+                 soft_search_reliability_alpha_init=0.05,
+                 use_template_search_competition=False,
+                 template_search_competition_layers=None,
+                 template_search_competition_scale=0.20,
+                 template_search_competition_alpha_init=0.10,
+                 template_search_competition_temperature=4.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -170,13 +183,53 @@ class VisionTransformerTBSI(BaseBackbone):
         self.da_in_layer = da_in_layer
         self.use_dgs = use_dgs
         self.use_checkpoint = use_checkpoint
+        self.use_signal_decouple = use_signal_decouple
+        self.use_soft_search_reliability = use_soft_search_reliability
+        self.use_template_search_competition = use_template_search_competition
+        self.signal_decouple_mode = signal_decouple_mode
+        signal_decouple_layers = signal_decouple_layers or []
+        signal_decouple_layers = set(signal_decouple_layers)
+        signal_decouple_layer_scales = signal_decouple_layer_scales or []
+        soft_search_reliability_layers = soft_search_reliability_layers or []
+        soft_search_reliability_layers = set(soft_search_reliability_layers)
+        template_search_competition_layers = template_search_competition_layers or []
+        template_search_competition_layers = set(template_search_competition_layers)
         if self.tbsi_loc is not None and type(self.tbsi_loc) == list:
             for i in range(len(self.tbsi_loc)):
+                use_sd_layer = use_signal_decouple and (
+                    len(signal_decouple_layers) == 0 or i in signal_decouple_layers)
+                use_ssr_layer = use_soft_search_reliability and (
+                    len(soft_search_reliability_layers) == 0 or i in soft_search_reliability_layers)
+                use_tsc_layer = use_template_search_competition and (
+                    len(template_search_competition_layers) == 0 or i in template_search_competition_layers)
+                layer_scale = (signal_decouple_layer_scales[i]
+                               if i < len(signal_decouple_layer_scales)
+                               else signal_decouple_scale)
                 self.tbsi_layers.append(TBSILayer(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
                 attn_drop=attn_drop_rate, drop_path=self.tbsi_drop_path[i], norm_layer=norm_layer, act_layer=act_layer,
-                use_degradation=da_in_layer, use_attn_gate=use_attn_gate, use_dgs=use_dgs, dgs_mode=dgs_mode))
+                use_degradation=da_in_layer, use_attn_gate=use_attn_gate, use_dgs=use_dgs, dgs_mode=dgs_mode,
+                use_signal_decouple=use_sd_layer, signal_decouple_mode=signal_decouple_mode,
+                signal_decouple_scale=layer_scale,
+                signal_decouple_alpha_init=signal_decouple_alpha_init,
+                use_soft_search_reliability=use_ssr_layer,
+                soft_search_reliability_scale=soft_search_reliability_scale,
+                soft_search_reliability_alpha_init=soft_search_reliability_alpha_init,
+                use_template_search_competition=use_tsc_layer,
+                template_search_competition_scale=template_search_competition_scale,
+                template_search_competition_alpha_init=template_search_competition_alpha_init,
+                template_search_competition_temperature=template_search_competition_temperature))
 
         self.init_weights(weight_init)
+        self._reset_bridge_module_init()
+
+    def _reset_bridge_module_init(self):
+        for layer in self.tbsi_layers:
+            if self.use_signal_decouple and hasattr(layer, 'signal_decoupler'):
+                layer.signal_decoupler.reset_last_layer()
+            if self.use_soft_search_reliability and hasattr(layer, 'soft_search_reliability'):
+                layer.soft_search_reliability.reset_last_layer()
+            if self.use_template_search_competition and hasattr(layer, 'template_search_competition'):
+                layer.template_search_competition.reset_last_layer()
 
     def forward_features(self, z, x, temporal_tokens=None):
         B, H, W = x[0].shape[0], x[0].shape[2], x[0].shape[3]

@@ -167,7 +167,7 @@ def run_dataset(dataset, trackers, debug=False, threads=0, num_gpus=8):
 
     multiprocessing.set_start_method('spawn', force=True)
 
-    if threads == 0:
+    if threads <= 1:
         mode = 'sequential'
     else:
         mode = 'parallel'

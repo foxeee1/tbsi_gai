@@ -52,6 +52,68 @@ python tracking/analysis_results.py --tracker_name tbsi_track --tracker_param vi
 - **PR** (Precision Rate): % frames within 20px center error
 - **NPR** (Normalized Precision): Normalized precision
 
+## Global Research Plan: Reliability-Guided Selective Interaction
+
+### Fixed Paper Story
+The paper direction is fixed as an EI-style extension of TBSI, not a new tracker
+family. The central claim is that TBSI bridges template and search features
+effectively, but treats all interaction representations as equally suitable for
+propagation and does not explicitly preserve reliable interaction history.
+
+The method story should stay:
+
+```
+Task-relevant Representation
+  -> Cleaner Cross-modal Bridge Interaction
+  -> Reliable Dual Interaction Tokens
+  -> More Robust RGB-T Tracking
+```
+
+Paper terminology should prefer **task-relevant representation** and
+**task-irrelevant representation**. Code may keep shorter names such as
+signal/interference where useful.
+
+### Structural Roadmap
+
+1. **Reliability-Guided Selective Interaction** is the next mainline direction.
+   The module should not universally strengthen every interaction. It should
+   estimate current-frame interaction reliability and conservatively control
+   when/how much the task-aware decoupled representation is allowed to affect
+   the bridge. The intended behavior is to keep gains on difficult complementary
+   scenes while reducing drops on strong-baseline attributes such as normal,
+   occlusion, background clutter, low illumination, and low resolution.
+
+2. **Reliability-Preserved Dual Interaction Token** is the second-stage direction.
+   Static and dynamic interaction tokens should store reliable bridge patterns,
+   not object templates. Dynamic updates must be reliability-gated so corrupted
+   frames do not poison temporal interaction history.
+
+3. **Common / Complementary / Residual Interaction Decomposition** is the
+   higher-risk structural extension. Use it only after the reliability-gated
+   route is measured, because it changes the representation split more deeply.
+
+### Differentiation From BTMTrack
+
+BTMTrack strengthens the template side with static/dynamic templates and performs
+temporal-modal candidate elimination before/around bridge interaction. This work
+should remain distinct: it controls **which interaction representations are
+propagated** and **which interaction histories are inherited**, without hard
+eliminating tokens or replacing the TBSI six-way CASTBlock structure.
+
+### Mini-ABC Acceptance Gate
+
+Fast mini ABC experiments are diagnostic proxies only. A variant is worth
+promoting when it satisfies most of the following:
+
+- Mean mini ABC AUC improves over the perfect baseline and is competitive with
+  v1.6.0 signal-decouple.
+- Attribute coverage improves: at least 4/5 proxy attribute groups should be
+  non-negative versus baseline, and no key group should drop severely.
+- The variant should specifically reduce the known failure pattern from prior
+  runs: gains on thermal-cross/appearance-change-like cases but drops on
+  occlusion/normal/low-quality baseline-strong scenes.
+- The module must have healthy gradient flow and non-collapsed gates/scales.
+
 ## TBSI Architecture
 
 ### Key Components
@@ -94,7 +156,7 @@ python tracking/analysis_results.py --tracker_name tbsi_track --tracker_param vi
 ```
 
 详见 [TBSI/TESTING_PIPELINE.md](TBSI/TESTING_PIPELINE.md)。核心原则：
-- **一次只跑一个测试**，单进程模式（`--threads 0`），避免 `multiprocessing.spawn` 残留
+- **测试必须用多线程**，指定 `--threads 6`。`threads=0` 触发 sequential mode，244条序列串行跑极慢（~3h）；`threads=6` 用 `multiprocessing.Pool` 并行跑（~1h）
 - 训练/测试严格分离，训完再测
 - 测试前自动清理残留进程，设置 `OMP_NUM_THREADS=4`
 

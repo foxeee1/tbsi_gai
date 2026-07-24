@@ -18,6 +18,51 @@ from lib.models.layers.attn_blocks import CASTBlock
 # DGSFusion Router Variants
 # =============================================================================
 
+
+class DiffProjConservativeRouter(nn.Module):
+    """
+    DGSFusion v4.5: 保守路由 — 加 β 不确定度门控.
+
+    在 v4 的 DiffProjRouter 基础上:
+      - gate 输出从 Linear(16,2) → Linear(16,4)
+      - [α_v, α_i, β_v, β_i], β ∈ (0,1) 表示模型对自己路由决策的信心
+      - 最终 α = β * α + (1-β) * 0.5
+        当 β↓ (不确定) → 拉向 0.5 (保守模式, 等于不做门控)
+        当 β↑ (确定)   → 保留原始 α 值 (正常路由)
+
+    Zero-init 保证训练起点: α=0.5, β=0.5 → 初始行为 = 不做门控.
+    ~12.4K params: Linear(768,16) + LayerNorm(16) + Linear(16,4).
+    """
+    def __init__(self, dim=768):
+        super().__init__()
+        self.diff_proj = nn.Sequential(
+            nn.Linear(dim, 16),
+            nn.LayerNorm(16),
+            nn.GELU(),
+        )
+        self.gate = nn.Linear(16, 4)  # [α_v, α_i, β_v, β_i]
+        # Zero-init: 起点 α≈0.5, β≈0.5
+        nn.init.zeros_(self.diff_proj[0].weight)
+        nn.init.zeros_(self.diff_proj[0].bias)
+        nn.init.zeros_(self.gate.weight)
+        nn.init.zeros_(self.gate.bias)
+
+    def forward(self, x_v_search, x_i_search):
+        diff = x_v_search - x_i_search        # (B, N_s, 768)
+        d = self.diff_proj(diff)              # (B, N_s, 16)
+        out = self.gate(d)                     # (B, N_s, 4)
+
+        α_v = torch.sigmoid(out[:, :, 0:1])    # 原始路由权重
+        α_i = torch.sigmoid(out[:, :, 1:2])
+        β_v = torch.sigmoid(out[:, :, 2:3])    # 路由置信度: 1=相信路由, 0=保守
+        β_i = torch.sigmoid(out[:, :, 3:4])
+
+        # 保守模式: 不确定时拉向 0.5
+        α_v = β_v * α_v + (1 - β_v) * 0.5
+        α_i = β_i * α_i + (1 - β_i) * 0.5
+
+        return torch.cat([α_v, α_i], dim=-1)   # (B, N_s, 2)
+
 class DivergenceRouter(nn.Module):
     """
     DGSFusion v1: 6D→1 + α ∈ [0.3, 0.7] (硬编码范围).
@@ -332,19 +377,255 @@ class DegradationModulator(nn.Module):
         return conf_joint[:, :, 0:1], conf_joint[:, :, 1:2]
 
 
+class SignalAwareDecoupler(nn.Module):
+    """
+    Task-aware Feature Decoupling Module.
+
+    Decouples template features into task-relevant signal (only this part
+    participates in cross-modal interaction) and task-irrelevant components
+    (preserved via residual connection).
+
+    Architecture:
+        Linear(dim → dim//4) → ReLU → Linear(dim//4 → dim) → Sigmoid → gate
+        signal = gate * x    (task-relevant)
+        interference = (1 - gate) * x   (task-irrelevant)
+
+    Zero-init on last linear: sigmoid(0) ≈ 0.5 → balanced split at start.
+    ~154K params for dim=768.
+    """
+    def __init__(self, dim=768, reduction=4, mode="split", residual_scale=0.5,
+                 alpha_init=0.1):
+        super().__init__()
+        self.mode = mode
+        self.residual_scale = residual_scale
+        rdim = max(dim // reduction, 16)
+        self.decouple = nn.Sequential(
+            nn.Linear(dim, rdim),
+            nn.ReLU(inplace=True),
+            nn.Linear(rdim, dim),
+        )
+        if mode == "reliability_residual":
+            self.reliability = nn.Sequential(
+                nn.Linear(dim * 3, rdim),
+                nn.ReLU(inplace=True),
+                nn.Linear(rdim, dim),
+            )
+        if mode == "conditional_residual":
+            self.reliability = nn.Sequential(
+                nn.Linear(dim * 4, rdim),
+                nn.ReLU(inplace=True),
+                nn.Linear(rdim, dim),
+            )
+        if mode in ("learnable_residual", "conditional_residual"):
+            alpha_init = min(max(alpha_init, 1e-4), residual_scale - 1e-4)
+            alpha_ratio = alpha_init / residual_scale
+            alpha_logit = math.log(alpha_ratio / (1.0 - alpha_ratio))
+            self.alpha_logit = nn.Parameter(torch.tensor(alpha_logit, dtype=torch.float32))
+        # Zero-init last layer: gate ≈ 0.5 at start (balanced split)
+        self.reset_last_layer()
+
+    def reset_last_layer(self):
+        """Keep the initial gate balanced after model-wide initialization."""
+        nn.init.zeros_(self.decouple[-1].weight)
+        nn.init.zeros_(self.decouple[-1].bias)
+        if hasattr(self, "reliability"):
+            nn.init.zeros_(self.reliability[-1].weight)
+            nn.init.zeros_(self.reliability[-1].bias)
+
+    def forward(self, x, x_rgb=None, x_tir=None, x_search=None):
+        logits = self.decouple(x)
+        if self.mode == "conditional_residual":
+            if x_rgb is None or x_tir is None or x_search is None:
+                raise ValueError("conditional_residual mode requires x_rgb, x_tir, and x_search inputs")
+            search_context = x_search.mean(dim=1, keepdim=True).expand_as(x)
+            modality_gap = (x_rgb - x_tir).abs()
+            reliability_inp = torch.cat([
+                x,
+                search_context,
+                (x - search_context).abs(),
+                modality_gap,
+            ], dim=-1)
+            reliability = torch.sigmoid(self.reliability(reliability_inp))
+            alpha = self.residual_scale * torch.sigmoid(self.alpha_logit)
+            modulation = alpha * (1.0 - reliability) * torch.tanh(logits)
+            signal = x * (1.0 + modulation)
+            interference = -x * modulation
+            return signal, interference
+
+        if self.mode == "reliability_residual":
+            if x_rgb is None or x_tir is None:
+                raise ValueError("reliability_residual mode requires x_rgb and x_tir inputs")
+            reliability_inp = torch.cat([x_rgb, x_tir, (x_rgb - x_tir).abs()], dim=-1)
+            reliability = torch.sigmoid(self.reliability(reliability_inp))
+            uncertainty = 1.0 - reliability
+            modulation = self.residual_scale * uncertainty * torch.tanh(logits)
+            signal = x * (1.0 + modulation)
+            interference = -x * modulation
+            return signal, interference
+
+        if self.mode == "learnable_residual":
+            alpha = self.residual_scale * torch.sigmoid(self.alpha_logit)
+            modulation = alpha * torch.tanh(logits)
+            signal = x * (1.0 + modulation)
+            interference = -x * modulation
+            return signal, interference
+
+        if self.mode == "residual":
+            modulation = self.residual_scale * torch.tanh(logits)
+            signal = x * (1.0 + modulation)
+            interference = -x * modulation
+            return signal, interference
+
+        gate = torch.sigmoid(logits)  # (B, T, C)
+        signal = gate * x
+        interference = (1 - gate) * x
+        return signal, interference
+
+
+class SoftSearchReliability(nn.Module):
+    """
+    Soft reliability modulation for search tokens.
+
+    This is a continuous alternative to hard token elimination: every search
+    token remains in the bridge, while a small identity-start residual learns
+    where RGB/TIR search evidence should be enhanced.
+    """
+    def __init__(self, dim=768, reduction=4, residual_scale=0.25, alpha_init=0.05):
+        super().__init__()
+        self.residual_scale = residual_scale
+        rdim = max(dim // reduction, 16)
+        self.reliability = nn.Sequential(
+            nn.Linear(dim * 4, rdim),
+            nn.ReLU(inplace=True),
+            nn.Linear(rdim, 2),
+        )
+        self.update = nn.Sequential(
+            nn.Linear(dim, rdim),
+            nn.ReLU(inplace=True),
+            nn.Linear(rdim, dim),
+        )
+        alpha_init = min(max(alpha_init, 1e-4), residual_scale - 1e-4)
+        alpha_ratio = alpha_init / residual_scale
+        alpha_logit = math.log(alpha_ratio / (1.0 - alpha_ratio))
+        self.alpha_logit = nn.Parameter(torch.tensor(alpha_logit, dtype=torch.float32))
+        self.reset_last_layer()
+
+    def reset_last_layer(self):
+        nn.init.zeros_(self.reliability[-1].weight)
+        nn.init.zeros_(self.reliability[-1].bias)
+        nn.init.zeros_(self.update[-1].weight)
+        nn.init.zeros_(self.update[-1].bias)
+
+    def forward(self, x_v_search, x_i_search, fused_template):
+        template_context = fused_template.mean(dim=1, keepdim=True).expand_as(x_v_search)
+        reliability_inp = torch.cat([
+            x_v_search,
+            x_i_search,
+            (x_v_search - x_i_search).abs(),
+            template_context,
+        ], dim=-1)
+        conf = torch.sigmoid(self.reliability(reliability_inp))
+        alpha = self.residual_scale * torch.sigmoid(self.alpha_logit)
+        update_v = torch.tanh(self.update(x_v_search))
+        update_i = torch.tanh(self.update(x_i_search))
+        x_v_search = x_v_search + alpha * conf[:, :, 0:1] * update_v
+        x_i_search = x_i_search + alpha * conf[:, :, 1:2] * update_i
+        return x_v_search, x_i_search, conf.mean(dim=1)
+
+
+class TemplateSearchCompetition(nn.Module):
+    """
+    Template-guided soft candidate competition for search tokens.
+
+    Unlike hard token elimination, this module keeps every search token in the
+    bridge. Tokens that match the fused template keep nearly full cross-attention
+    strength, while weak template candidates are softly pulled toward the
+    original search representation.
+    """
+    def __init__(self, dim=768, residual_scale=0.20, alpha_init=0.10, temperature=4.0):
+        super().__init__()
+        self.residual_scale = residual_scale
+        self.temperature = temperature
+        alpha_init = min(max(alpha_init, 1e-4), residual_scale - 1e-4)
+        alpha_ratio = alpha_init / residual_scale
+        alpha_logit = math.log(alpha_ratio / (1.0 - alpha_ratio))
+        self.alpha_logit = nn.Parameter(torch.tensor(alpha_logit, dtype=torch.float32))
+
+    def reset_last_layer(self):
+        pass
+
+    def _candidate_score(self, x_search, fused_template):
+        template_context = fused_template.mean(dim=1, keepdim=True)
+        sim = F.cosine_similarity(
+            F.normalize(x_search, dim=-1),
+            F.normalize(template_context, dim=-1),
+            dim=-1,
+        ).unsqueeze(-1)
+        sim = (sim - sim.mean(dim=1, keepdim=True)) / (sim.std(dim=1, keepdim=True) + 1e-6)
+        return torch.sigmoid(self.temperature * sim)
+
+    def forward(self, x_v_search, x_i_search, fused_template):
+        score_v = self._candidate_score(x_v_search, fused_template)
+        score_i = self._candidate_score(x_i_search, fused_template)
+        alpha = self.residual_scale * torch.sigmoid(self.alpha_logit)
+        gate_v = 1.0 - alpha * (1.0 - score_v)
+        gate_i = 1.0 - alpha * (1.0 - score_i)
+        return gate_v.clamp(0.0, 1.0), gate_i.clamp(0.0, 1.0), torch.cat([
+            score_v.mean(dim=1), score_i.mean(dim=1)
+        ], dim=-1)
+
+
 class TBSILayer(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, use_degradation=False,
-                 use_attn_gate=False, use_temporal_tokens=False, use_dgs=False, dgs_mode="v1"):
+                 use_attn_gate=False, use_temporal_tokens=False, use_dgs=False, dgs_mode="v1",
+                 use_signal_decouple=False, signal_decouple_mode="split", signal_decouple_scale=0.5,
+                 signal_decouple_alpha_init=0.1, use_soft_search_reliability=False,
+                 soft_search_reliability_scale=0.25, soft_search_reliability_alpha_init=0.05,
+                 use_template_search_competition=False,
+                 template_search_competition_scale=0.20,
+                 template_search_competition_alpha_init=0.10,
+                 template_search_competition_temperature=4.0):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
+        self.use_signal_decouple = use_signal_decouple
+        self.use_soft_search_reliability = use_soft_search_reliability
+        self.use_template_search_competition = use_template_search_competition
 
         self.t_fusion = nn.Sequential(
             nn.Linear(dim * 2, dim),
             nn.LayerNorm(dim),
             nn.GELU()
         )
+
+        if use_signal_decouple:
+            self.signal_decoupler = SignalAwareDecoupler(
+                dim=dim, mode=signal_decouple_mode, residual_scale=signal_decouple_scale,
+                alpha_init=signal_decouple_alpha_init)
+            rp = sum(p.numel() for p in self.signal_decoupler.parameters())
+            print(f"  [SignalDecouple] Task-aware Feature Decoupling active "
+                  f"(mode={signal_decouple_mode}, {rp} params)")
+
+        if use_soft_search_reliability:
+            self.soft_search_reliability = SoftSearchReliability(
+                dim=dim, residual_scale=soft_search_reliability_scale,
+                alpha_init=soft_search_reliability_alpha_init)
+            rp = sum(p.numel() for p in self.soft_search_reliability.parameters())
+            print(f"  [SoftSearchReliability] Search token soft modulation active "
+                  f"({rp} params, scale={soft_search_reliability_scale}, "
+                  f"alpha_init={soft_search_reliability_alpha_init})")
+
+        if use_template_search_competition:
+            self.template_search_competition = TemplateSearchCompetition(
+                dim=dim, residual_scale=template_search_competition_scale,
+                alpha_init=template_search_competition_alpha_init,
+                temperature=template_search_competition_temperature)
+            rp = sum(p.numel() for p in self.template_search_competition.parameters())
+            print(f"  [TemplateSearchCompetition] Template-guided search candidate competition active "
+                  f"({rp} params, scale={template_search_competition_scale}, "
+                  f"alpha_init={template_search_competition_alpha_init}, "
+                  f"temperature={template_search_competition_temperature})")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
@@ -382,17 +663,43 @@ class TBSILayer(nn.Module):
                 self.dgs_router = SelfQualityRouter(dim)
             elif dgs_mode == "v6":
                 self.dgs_router = DiffTemplateRouter(dim)
+            elif dgs_mode == "v4.5":
+                self.dgs_router = DiffProjConservativeRouter(dim)
             else:
                 raise ValueError(f"Unknown DGS_MODE: {dgs_mode}")
             rp = sum(p.numel() for p in self.dgs_router.parameters())
             print(f"  [DGSFusion] Router active (mode={dgs_mode}, {rp} params)")
 
     def forward(self, x_v, x_i, lens_z, temporal_tokens=None):
-        fused_t = torch.cat([x_v[:, :lens_z, :], x_i[:, :lens_z, :]], dim=2)
+        x_v_template = x_v[:, :lens_z, :]
+        x_i_template = x_i[:, :lens_z, :]
+        fused_t = torch.cat([x_v_template, x_i_template], dim=2)
         fused_t = self.t_fusion(fused_t)
+
+        # ===== Signal-aware Decoupling: only task-relevant signal participates in cross-attn =====
+        fused_t_interference = None
+        if self.use_signal_decouple:
+            x_v_search = x_v[:, lens_z:, :]
+            x_i_search = x_i[:, lens_z:, :]
+            x_search_context = 0.5 * (x_v_search + x_i_search)
+            fused_t_signal, fused_t_interference = self.signal_decoupler(
+                fused_t, x_rgb=x_v_template, x_tir=x_i_template, x_search=x_search_context)
+            # Use signal in cross-attention; interference preserved as residual
+            fused_t_attn = fused_t_signal
+        else:
+            fused_t_attn = fused_t
 
         x_v_orig = x_v[:, lens_z:, :]
         x_i_orig = x_i[:, lens_z:, :]
+        search_quality_signal = None
+        if self.use_soft_search_reliability:
+            x_v_orig, x_i_orig, search_quality_signal = self.soft_search_reliability(
+                x_v_orig, x_i_orig, fused_t)
+
+        tsc_gate_v = tsc_gate_i = None
+        if self.use_template_search_competition:
+            tsc_gate_v, tsc_gate_i, search_quality_signal = self.template_search_competition(
+                x_v_orig, x_i_orig, fused_t)
 
         # ===== Compute per-token quality masks (for CASTBlocks) =====
         qm_v = qm_i = None
@@ -415,15 +722,17 @@ class TBSILayer(nn.Module):
         elif self.use_degradation:
             conf_v, conf_i = self.degradation_mod(x_v_orig, x_i_orig, temporal_tokens=temporal_tokens)
             qm_v, qm_i = conf_v, conf_i
+        elif self.use_template_search_competition:
+            qm_v, qm_i = tsc_gate_v, tsc_gate_i
 
-        # 4 CASTBlocks (quality-guided cross-attention)
-        fused_t = self.ca_s2t_i2f(torch.cat([fused_t, x_i_orig], dim=1),
-                                  quality_mask=qm_i)[:, :lens_z, :]
-        temp_x_v = self.ca_t2s_f2v(torch.cat([fused_t, x_v_orig], dim=1),
+        # 4 CASTBlocks (quality-guided cross-attention, using decoupled signal)
+        fused_t_attn = self.ca_s2t_i2f(torch.cat([fused_t_attn, x_i_orig], dim=1),
+                                       quality_mask=qm_i)[:, :lens_z, :]
+        temp_x_v = self.ca_t2s_f2v(torch.cat([fused_t_attn, x_v_orig], dim=1),
                                    quality_mask=qm_v)[:, lens_z:, :]
-        fused_t = self.ca_s2t_v2f(torch.cat([fused_t, x_v_orig], dim=1),
-                                  quality_mask=qm_v)[:, :lens_z, :]
-        temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t, x_i_orig], dim=1),
+        fused_t_attn = self.ca_s2t_v2f(torch.cat([fused_t_attn, x_v_orig], dim=1),
+                                       quality_mask=qm_v)[:, :lens_z, :]
+        temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t_attn, x_i_orig], dim=1),
                                    quality_mask=qm_i)[:, lens_z:, :]
 
         # ===== Apply routing/gate to combine cross-attn output with original =====
@@ -450,15 +759,25 @@ class TBSILayer(nn.Module):
             x_i = torch.cat([x_i[:, :lens_z, :],
                              temp_x_i * (1 - conf_i) + x_i_orig * conf_i], dim=1)
             q_global = torch.cat([conf_v.mean(dim=1), conf_i.mean(dim=1)], dim=-1)
+        elif self.use_template_search_competition:
+            x_v = torch.cat([x_v[:, :lens_z, :],
+                             tsc_gate_v * temp_x_v + (1.0 - tsc_gate_v) * x_v_orig], dim=1)
+            x_i = torch.cat([x_i[:, :lens_z, :],
+                             tsc_gate_i * temp_x_i + (1.0 - tsc_gate_i) * x_i_orig], dim=1)
+            q_global = search_quality_signal
         else:
             x_v = torch.cat([x_v[:, :lens_z, :], temp_x_v], dim=1)
             x_i = torch.cat([x_i[:, :lens_z, :], temp_x_i], dim=1)
-            q_global = None
+            q_global = search_quality_signal
 
-        # Template self-attention
+        # ===== Restore interference for template self-attention (not cross-modal) =====
+        if self.use_signal_decouple and fused_t_interference is not None:
+            fused_t_attn = fused_t_attn + fused_t_interference
+
+        # Template self-attention (with full information: signal + interference)
         x_v[:, :lens_z, :] = self.ca_t2t_f2v(
-            torch.cat([x_v[:, :lens_z, :], fused_t], dim=1))[:, :lens_z, :]
+            torch.cat([x_v[:, :lens_z, :], fused_t_attn], dim=1))[:, :lens_z, :]
         x_i[:, :lens_z, :] = self.ca_t2t_f2i(
-            torch.cat([x_i[:, :lens_z, :], fused_t], dim=1))[:, :lens_z, :]
+            torch.cat([x_i[:, :lens_z, :], fused_t_attn], dim=1))[:, :lens_z, :]
 
         return x_v, x_i, q_global

@@ -384,12 +384,58 @@ def build_tbsi_track(cfg, training=True):
         use_dgs = getattr(cfg.MODEL, "DGSFUSION", False)
         dgs_mode = getattr(cfg.MODEL, "DGS_MODE", "v1")
         use_checkpoint = getattr(cfg.TRAIN, "USE_CHECKPOINT", False)
+        use_signal_decouple = getattr(cfg.MODEL, "SIGNAL_DECOUPLE", False)
+        signal_decouple_mode = getattr(cfg.MODEL, "SIGNAL_DECOUPLE_MODE", "split")
+        signal_decouple_layers = getattr(cfg.MODEL, "SIGNAL_DECOUPLE_LAYERS", [])
+        signal_decouple_scale = getattr(cfg.MODEL, "SIGNAL_DECOUPLE_SCALE", 0.5)
+        signal_decouple_layer_scales = getattr(cfg.MODEL, "SIGNAL_DECOUPLE_LAYER_SCALES", [])
+        signal_decouple_alpha_init = getattr(cfg.MODEL, "SIGNAL_DECOUPLE_ALPHA_INIT", 0.1)
+        use_soft_search_reliability = getattr(cfg.MODEL, "SOFT_SEARCH_RELIABILITY", False)
+        soft_search_reliability_layers = getattr(cfg.MODEL, "SOFT_SEARCH_RELIABILITY_LAYERS", [])
+        soft_search_reliability_scale = getattr(cfg.MODEL, "SOFT_SEARCH_RELIABILITY_SCALE", 0.25)
+        soft_search_reliability_alpha_init = getattr(cfg.MODEL, "SOFT_SEARCH_RELIABILITY_ALPHA_INIT", 0.05)
+        use_template_search_competition = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION", False)
+        template_search_competition_layers = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_LAYERS", [])
+        template_search_competition_scale = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_SCALE", 0.20)
+        template_search_competition_alpha_init = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_ALPHA_INIT", 0.10)
+        template_search_competition_temperature = getattr(cfg.MODEL, "TEMPLATE_SEARCH_COMPETITION_TEMPERATURE", 4.0)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
                                             da_in_layer=da_in_layer,
                                             use_dgs=use_dgs, dgs_mode=dgs_mode,
-                                            use_checkpoint=use_checkpoint)
+                                            use_checkpoint=use_checkpoint,
+                                            use_signal_decouple=use_signal_decouple,
+                                            signal_decouple_mode=signal_decouple_mode,
+                                            signal_decouple_layers=signal_decouple_layers,
+                                            signal_decouple_scale=signal_decouple_scale,
+                                            signal_decouple_layer_scales=signal_decouple_layer_scales,
+                                            signal_decouple_alpha_init=signal_decouple_alpha_init,
+                                            use_soft_search_reliability=use_soft_search_reliability,
+                                            soft_search_reliability_layers=soft_search_reliability_layers,
+                                            soft_search_reliability_scale=soft_search_reliability_scale,
+                                            soft_search_reliability_alpha_init=soft_search_reliability_alpha_init,
+                                            use_template_search_competition=use_template_search_competition,
+                                            template_search_competition_layers=template_search_competition_layers,
+                                            template_search_competition_scale=template_search_competition_scale,
+                                            template_search_competition_alpha_init=template_search_competition_alpha_init,
+                                            template_search_competition_temperature=template_search_competition_temperature)
+
+        if use_signal_decouple:
+            layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
+            print(f'  [SignalDecouple] Task-aware Feature Decoupling enabled '
+                  f'(mode={signal_decouple_mode}, layers={layer_msg})')
+        if use_soft_search_reliability:
+            layer_msg = "all" if not soft_search_reliability_layers else list(soft_search_reliability_layers)
+            print(f'  [SoftSearchReliability] Search token soft modulation enabled '
+                  f'(layers={layer_msg}, scale={soft_search_reliability_scale}, '
+                  f'alpha_init={soft_search_reliability_alpha_init})')
+        if use_template_search_competition:
+            layer_msg = "all" if not template_search_competition_layers else list(template_search_competition_layers)
+            print(f'  [TemplateSearchCompetition] Template-guided search competition enabled '
+                  f'(layers={layer_msg}, scale={template_search_competition_scale}, '
+                  f'alpha_init={template_search_competition_alpha_init}, '
+                  f'temperature={template_search_competition_temperature})')
     else:
         raise NotImplementedError
 

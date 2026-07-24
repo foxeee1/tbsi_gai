@@ -1,0 +1,99 @@
+# ==============================================================================
+# [全量] Signal-aware Bridge v1: Task-aware Feature Decoupling
+# ==============================================================================
+# 基于 v1.0.0-完美基线-全量，仅添加 SIGNAL_DECOUPLE:
+#   模型改动: MODEL.SIGNAL_DECOUPLE=True
+#   新增模块: SignalAwareDecoupler (插入 TBSILayer, 3层共享)
+#     在 fused_t 之后将模板特征解耦为 task-relevant signal + task-irrelevant
+#     仅 signal 参与跨模态交叉注意力, interference 通过残差连接保留
+#   参数: ~154K × 3 = ~462K
+#   其他配置 → 完美基线完全对齐
+# ==============================================================================
+# 📋 论文故事定位:
+#   Innovation 1: 解决 "What should be propagated?"
+#     现有 TBSI 默认所有模板特征同等重要 → 我们提出选择性传播
+#     只有任务相关信号进入交叉注意力, 任务无关分量残差保留
+#   Innovation 2: Dual Interaction Token (后续版本)
+# ==============================================================================
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  - 0.449
+  - 0.449
+  - 0.449
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    SCALE_JITTER: 0.25
+    SIZE: 256
+    NUMBER: 1
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  - 0.226
+  - 0.226
+  - 0.226
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    SCALE_JITTER: 0
+    SIZE: 128
+  TRAIN:
+    DATASETS_NAME:
+      - LasHeR_train
+    DATASETS_RATIO:
+      - 1
+    SAMPLE_PER_EPOCH: 60000
+  VAL:
+    DATASETS_NAME:
+    - LasHeR_test
+    DATASETS_RATIO:
+    - 1
+    SAMPLE_PER_EPOCH: 10000
+MODEL:
+  PRETRAIN_FILE: "TBSITrack_SOT_Pretrained.pth.tar"
+  EXTRA_MERGER: False
+  RETURN_INTER: False
+  SIGNAL_DECOUPLE: True          # ← Task-aware Feature Decoupling
+  BACKBONE:
+    TYPE: vit_base_patch16_224_tbsi
+    STRIDE: 16
+    TBSI_LOC: [3, 6, 9]
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TRAIN:
+  BACKBONE_MULTIPLIER: 0.1
+  DROP_PATH_RATE: 0.1
+  TBSI_DROP_PATH: [0.0, 0.0, 0.0]
+  SOT_PRETRAIN: True
+  BATCH_SIZE: 32
+  EPOCH: 15
+  GIOU_WEIGHT: 2.0
+  L1_WEIGHT: 5.0
+  GRAD_CLIP_NORM: 0.1
+  LR: 0.0001
+  LR_DROP_EPOCH: 10
+  NUM_WORKER: 8
+  OPTIMIZER: ADAMW
+  PRINT_INTERVAL: 50
+  SCHEDULER:
+    TYPE: step
+    DECAY_RATE: 0.1
+  VAL_EPOCH_INTERVAL: 10
+  WEIGHT_DECAY: 0.0001
+  AMP: True
+  PERSISTENT_WORKERS: True
+  PREFETCH_FACTOR: 4
+  SAVE_EPOCHS: [15]
+TEST:
+  EPOCH: 15
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128
