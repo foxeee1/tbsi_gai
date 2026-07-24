@@ -114,6 +114,44 @@ promoting when it satisfies most of the following:
   occlusion/normal/low-quality baseline-strong scenes.
 - The module must have healthy gradient flow and non-collapsed gates/scales.
 
+### Default Fast Iteration Protocol
+
+When the user asks for “快速训练测试迭代诊断”, use the following three-stage
+screening rule by default unless the user explicitly overrides it.
+
+**Stage 0: mini ABC health check**
+
+- Train/test on MiniLasHeR A/B/C.
+- Purpose: verify executable code path, loss behavior, gradient flow, gate/scale
+  health, and obvious metric collapse.
+- Decision role: health and rough relative ranking only. Do not use mini ABC
+  alone to claim full-set effectiveness.
+- Minimum promotion signal: mean metrics should not materially collapse versus
+  the perfect mini baseline, and proxy attributes should not show broad failure.
+
+**Stage 1: attribute-sentinel validation**
+
+- Build or reuse a fixed small sentinel set from full validation/test metadata.
+- Cover the full-set failure-driving attributes first:
+  NO, HO, LI, BC, LR, CM, FM, TC, PO, SV, plus any paper-critical attributes.
+- Purpose: judge whether a method protects baseline-strong and fragile
+  attributes while preserving gains on complementary hard cases.
+- Decision role: main fast decision gate before spending on full training/test.
+- Promotion signal: no severe drop on key sentinel attributes, better attribute
+  coverage than the parent version, and overall performance competitive with the
+  accepted mini/full reference.
+
+**Stage 2: full evaluation**
+
+- Run full training/testing only for variants that pass Stage 1 or for explicit
+  user-requested full checks.
+- Purpose: claim-carrying evidence against the full baseline.
+- Decision role: only full results can support final effectiveness claims.
+
+Mini ABC therefore remains a fast体检集, not the final direction judge. The
+attribute-sentinel set is the default bridge between cheap iteration and full
+claim-carrying evaluation.
+
 ## TBSI Architecture
 
 ### Key Components
