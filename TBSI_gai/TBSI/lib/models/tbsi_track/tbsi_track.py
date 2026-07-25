@@ -410,6 +410,8 @@ def build_tbsi_track(cfg, training=True):
             cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_TEMPERATURE", 4.0)
         template_conditioned_bridge_bias_mode = getattr(
             cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_BIAS_MODE", "signed")
+        template_conditioned_bridge_neg_floor = getattr(
+            cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_NEG_FLOOR", -0.3)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -439,7 +441,8 @@ def build_tbsi_track(cfg, training=True):
                                             template_conditioned_bridge_layers=template_conditioned_bridge_layers,
                                             template_conditioned_bridge_scale=template_conditioned_bridge_scale,
                                             template_conditioned_bridge_temperature=template_conditioned_bridge_temperature,
-                                            template_conditioned_bridge_bias_mode=template_conditioned_bridge_bias_mode)
+                                            template_conditioned_bridge_bias_mode=template_conditioned_bridge_bias_mode,
+                                            template_conditioned_bridge_neg_floor=template_conditioned_bridge_neg_floor)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -467,7 +470,8 @@ def build_tbsi_track(cfg, training=True):
             print(f'  [TemplateConditionedBridge] Pre-softmax bridge bias enabled '
                   f'(layers={layer_msg}, scale={template_conditioned_bridge_scale}, '
                   f'temperature={template_conditioned_bridge_temperature}, '
-                  f'bias_mode={template_conditioned_bridge_bias_mode})')
+                  f'bias_mode={template_conditioned_bridge_bias_mode}, '
+                  f'neg_floor={template_conditioned_bridge_neg_floor})')
     else:
         raise NotImplementedError
 
