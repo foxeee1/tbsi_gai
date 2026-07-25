@@ -615,6 +615,65 @@ class TemplateConditionedBridgeMask(nn.Module):
         return self.scale * bias.unsqueeze(1)
 
 
+class CFSReliabilityBridgeBias(nn.Module):
+    """
+    Cross-modal feature-structure reliability bias for bridge attention.
+
+    The descriptor uses RGB-TIR search-token agreement and modality-internal
+    structure statistics, which are complementary to TBSI's search-template
+    attention logits.
+    """
+    def __init__(self, scale=0.2, hidden_dim=32):
+        super().__init__()
+        self.scale = scale
+        self.mlp = nn.Sequential(
+            nn.LayerNorm(12),
+            nn.Linear(12, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, x_v, x_i):
+        bsz, num_tokens, dim = x_v.shape
+        x_v_norm = F.normalize(x_v, dim=-1)
+        x_i_norm = F.normalize(x_i, dim=-1)
+        mu_v = F.normalize(x_v.mean(dim=1, keepdim=True), dim=-1)
+        mu_i = F.normalize(x_i.mean(dim=1, keepdim=True), dim=-1)
+
+        cos_cross = (x_v_norm * x_i_norm).sum(-1, keepdim=True)
+        l2_diff = (x_v - x_i).pow(2).mean(dim=-1, keepdim=True).sqrt()
+        norm_v = x_v.norm(dim=-1, keepdim=True)
+        norm_i = x_i.norm(dim=-1, keepdim=True)
+        energy_ratio = torch.log((norm_v + 1e-6) / (norm_i + 1e-6))
+        energy_absdiff = (norm_v - norm_i).abs() / (norm_v + norm_i + 1e-6)
+
+        cos_v_self = (x_v_norm * mu_v).sum(-1, keepdim=True)
+        cos_i_self = (x_i_norm * mu_i).sum(-1, keepdim=True)
+        cos_v_cross = (x_v_norm * mu_i).sum(-1, keepdim=True)
+        cos_i_cross = (x_i_norm * mu_v).sum(-1, keepdim=True)
+
+        sim_v = x_v_norm @ x_v_norm.transpose(-2, -1)
+        sim_i = x_i_norm @ x_i_norm.transpose(-2, -1)
+        p_v = F.softmax(sim_v, dim=-1).clamp_min(1e-6)
+        p_i = F.softmax(sim_i, dim=-1).clamp_min(1e-6)
+        mix = (0.5 * (p_v + p_i)).clamp_min(1e-6)
+        js_struct = 0.5 * (
+            (p_v * (p_v.log() - mix.log())).sum(dim=-1, keepdim=True) +
+            (p_i * (p_i.log() - mix.log())).sum(dim=-1, keepdim=True))
+        ent_v = -(p_v * p_v.log()).sum(dim=-1, keepdim=True) / math.log(num_tokens)
+        ent_i = -(p_i * p_i.log()).sum(dim=-1, keepdim=True) / math.log(num_tokens)
+
+        desc = torch.cat([
+            cos_cross, l2_diff, energy_ratio, energy_absdiff,
+            cos_v_self, cos_i_self, cos_v_cross, cos_i_cross,
+            js_struct, ent_v, ent_i, (ent_v - ent_i).abs(),
+        ], dim=-1)
+        bias = torch.tanh(self.mlp(desc))
+        return self.scale * bias.transpose(1, 2)
+
+
 class OutputResidualGate(nn.Module):
     """
     Delta-level adapter after TBSI interaction outputs.
@@ -700,7 +759,10 @@ class TBSILayer(nn.Module):
                  template_conditioned_bridge_scale=0.2,
                  template_conditioned_bridge_temperature=4.0,
                  template_conditioned_bridge_bias_mode="signed",
-                 template_conditioned_bridge_neg_floor=-0.3):
+                 template_conditioned_bridge_neg_floor=-0.3,
+                 use_cfs_reliability_bridge=False,
+                 cfs_reliability_bridge_scale=0.2,
+                 cfs_reliability_bridge_hidden=32):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -709,6 +771,7 @@ class TBSILayer(nn.Module):
         self.use_template_search_competition = use_template_search_competition
         self.use_output_residual_gate = use_output_residual_gate
         self.use_template_conditioned_bridge = use_template_conditioned_bridge
+        self.use_cfs_reliability_bridge = use_cfs_reliability_bridge
 
         self.t_fusion = nn.Sequential(
             nn.Linear(dim * 2, dim),
@@ -768,6 +831,15 @@ class TBSILayer(nn.Module):
                   f"temperature={template_conditioned_bridge_temperature}, "
                   f"bias_mode={template_conditioned_bridge_bias_mode}, "
                   f"neg_floor={template_conditioned_bridge_neg_floor})")
+
+        if use_cfs_reliability_bridge:
+            self.cfs_reliability_bridge = CFSReliabilityBridgeBias(
+                scale=cfs_reliability_bridge_scale,
+                hidden_dim=cfs_reliability_bridge_hidden)
+            rp = sum(p.numel() for p in self.cfs_reliability_bridge.parameters())
+            print(f"  [CFSReliabilityBridge] Cross-modal feature-structure bridge bias active "
+                  f"({rp} params, scale={cfs_reliability_bridge_scale}, "
+                  f"hidden={cfs_reliability_bridge_hidden}, zero-init)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
@@ -871,6 +943,10 @@ class TBSILayer(nn.Module):
         if self.use_template_conditioned_bridge:
             tcb_bias_i = self.template_conditioned_bridge(x_i_orig, fused_t)
             tcb_bias_v = self.template_conditioned_bridge(x_v_orig, fused_t)
+        if self.use_cfs_reliability_bridge:
+            cfs_bias = self.cfs_reliability_bridge(x_v_orig, x_i_orig)
+            tcb_bias_i = cfs_bias if tcb_bias_i is None else tcb_bias_i + cfs_bias
+            tcb_bias_v = cfs_bias if tcb_bias_v is None else tcb_bias_v + cfs_bias
 
         # 4 CASTBlocks (quality-guided cross-attention, using decoupled signal)
         fused_t_attn = self.ca_s2t_i2f(torch.cat([fused_t_attn, x_i_orig], dim=1),

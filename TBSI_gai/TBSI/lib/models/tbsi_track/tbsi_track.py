@@ -412,6 +412,10 @@ def build_tbsi_track(cfg, training=True):
             cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_BIAS_MODE", "signed")
         template_conditioned_bridge_neg_floor = getattr(
             cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_NEG_FLOOR", -0.3)
+        use_cfs_reliability_bridge = getattr(cfg.MODEL, "CFS_RELIABILITY_BRIDGE", False)
+        cfs_reliability_bridge_layers = getattr(cfg.MODEL, "CFS_RELIABILITY_BRIDGE_LAYERS", [])
+        cfs_reliability_bridge_scale = getattr(cfg.MODEL, "CFS_RELIABILITY_BRIDGE_SCALE", 0.2)
+        cfs_reliability_bridge_hidden = getattr(cfg.MODEL, "CFS_RELIABILITY_BRIDGE_HIDDEN", 32)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -442,7 +446,11 @@ def build_tbsi_track(cfg, training=True):
                                             template_conditioned_bridge_scale=template_conditioned_bridge_scale,
                                             template_conditioned_bridge_temperature=template_conditioned_bridge_temperature,
                                             template_conditioned_bridge_bias_mode=template_conditioned_bridge_bias_mode,
-                                            template_conditioned_bridge_neg_floor=template_conditioned_bridge_neg_floor)
+                                            template_conditioned_bridge_neg_floor=template_conditioned_bridge_neg_floor,
+                                            use_cfs_reliability_bridge=use_cfs_reliability_bridge,
+                                            cfs_reliability_bridge_layers=cfs_reliability_bridge_layers,
+                                            cfs_reliability_bridge_scale=cfs_reliability_bridge_scale,
+                                            cfs_reliability_bridge_hidden=cfs_reliability_bridge_hidden)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -472,6 +480,11 @@ def build_tbsi_track(cfg, training=True):
                   f'temperature={template_conditioned_bridge_temperature}, '
                   f'bias_mode={template_conditioned_bridge_bias_mode}, '
                   f'neg_floor={template_conditioned_bridge_neg_floor})')
+        if use_cfs_reliability_bridge:
+            layer_msg = "all" if not cfs_reliability_bridge_layers else list(cfs_reliability_bridge_layers)
+            print(f'  [CFSReliabilityBridge] Cross-modal feature-structure bridge bias enabled '
+                  f'(layers={layer_msg}, scale={cfs_reliability_bridge_scale}, '
+                  f'hidden={cfs_reliability_bridge_hidden})')
     else:
         raise NotImplementedError
 

@@ -77,6 +77,10 @@ cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_SCALE = 0.2  # Logit-bias scale for target
 cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_TEMPERATURE = 4.0  # Sharpness for template-search relevance
 cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_BIAS_MODE = "signed"  # signed | positive | clipped_signed
 cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_NEG_FLOOR = -0.3  # Lower bound for clipped_signed bias before scale
+cfg.MODEL.CFS_RELIABILITY_BRIDGE = False  # Cross-modal feature-structure reliability pre-softmax bridge bias
+cfg.MODEL.CFS_RELIABILITY_BRIDGE_LAYERS = []  # TBSI layer indices; empty means all TBSI layers
+cfg.MODEL.CFS_RELIABILITY_BRIDGE_SCALE = 0.2  # Logit-bias scale after the CFS reliability MLP
+cfg.MODEL.CFS_RELIABILITY_BRIDGE_HIDDEN = 32  # Hidden dimension for the lightweight descriptor MLP
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 
