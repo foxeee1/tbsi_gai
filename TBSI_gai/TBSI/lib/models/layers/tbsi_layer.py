@@ -603,7 +603,12 @@ class OutputResidualGate(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(rdim, dim),
         )
-        gate_dim = dim * 3 if mode == "naive" else dim * 4 + 3
+        if mode == "naive":
+            gate_dim = dim * 3
+        elif mode == "reliability_template":
+            gate_dim = dim * 4 + 4
+        else:
+            gate_dim = dim * 4 + 3
         self.gate = nn.Sequential(
             nn.Linear(gate_dim, rdim),
             nn.ReLU(inplace=True),
@@ -617,9 +622,9 @@ class OutputResidualGate(nn.Module):
         nn.init.zeros_(self.gate[-1].weight)
         nn.init.zeros_(self.gate[-1].bias)
 
-    def forward(self, interaction_out, original_search):
+    def forward(self, interaction_out, original_search, template_context=None):
         delta = interaction_out - original_search
-        if self.mode == "reliability":
+        if self.mode in ("reliability", "reliability_template"):
             interaction_norm = F.normalize(interaction_out, dim=-1)
             original_norm = F.normalize(original_search, dim=-1)
             delta_norm = F.normalize(delta, dim=-1)
@@ -628,6 +633,15 @@ class OutputResidualGate(nn.Module):
                 original_search.norm(dim=-1, keepdim=True) + 1e-6)
             delta_alignment = F.cosine_similarity(delta_norm, original_norm, dim=-1).unsqueeze(-1)
             reliability_stats = torch.cat([agreement, delta_energy, delta_alignment], dim=-1)
+            if self.mode == "reliability_template":
+                if template_context is None:
+                    template_agreement = torch.zeros_like(agreement)
+                else:
+                    template_anchor = template_context.mean(dim=1, keepdim=True)
+                    template_anchor = F.normalize(template_anchor, dim=-1)
+                    template_agreement = F.cosine_similarity(
+                        original_norm, template_anchor, dim=-1).unsqueeze(-1)
+                reliability_stats = torch.cat([reliability_stats, template_agreement], dim=-1)
             gate_inp = torch.cat([
                 interaction_out, original_search, delta, delta.abs(), reliability_stats
             ], dim=-1)
@@ -817,8 +831,8 @@ class TBSILayer(nn.Module):
 
         output_gate_signal = None
         if self.use_output_residual_gate:
-            temp_x_v, gate_v = self.output_residual_gate_v(temp_x_v, x_v_orig)
-            temp_x_i, gate_i = self.output_residual_gate_i(temp_x_i, x_i_orig)
+            temp_x_v, gate_v = self.output_residual_gate_v(temp_x_v, x_v_orig, fused_t)
+            temp_x_i, gate_i = self.output_residual_gate_i(temp_x_i, x_i_orig, fused_t)
             output_gate_signal = torch.cat([gate_v, gate_i], dim=-1)
 
         # ===== Apply routing/gate to combine cross-attn output with original =====
