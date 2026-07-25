@@ -144,7 +144,10 @@ class VisionTransformerTBSI(BaseBackbone):
                  use_cfs_reliability_bridge=False,
                  cfs_reliability_bridge_layers=None,
                  cfs_reliability_bridge_scale=0.2,
-                 cfs_reliability_bridge_hidden=32):
+                 cfs_reliability_bridge_hidden=32,
+                 use_competitive_bridge=False,
+                 competitive_bridge_layers=None,
+                 competitive_bridge_temperature=1.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -203,6 +206,7 @@ class VisionTransformerTBSI(BaseBackbone):
         self.use_output_residual_gate = use_output_residual_gate
         self.use_template_conditioned_bridge = use_template_conditioned_bridge
         self.use_cfs_reliability_bridge = use_cfs_reliability_bridge
+        self.use_competitive_bridge = use_competitive_bridge
         self.signal_decouple_mode = signal_decouple_mode
         signal_decouple_layers = signal_decouple_layers or []
         signal_decouple_layers = set(signal_decouple_layers)
@@ -217,6 +221,8 @@ class VisionTransformerTBSI(BaseBackbone):
         template_conditioned_bridge_layers = set(template_conditioned_bridge_layers)
         cfs_reliability_bridge_layers = cfs_reliability_bridge_layers or []
         cfs_reliability_bridge_layers = set(cfs_reliability_bridge_layers)
+        competitive_bridge_layers = competitive_bridge_layers or []
+        competitive_bridge_layers = set(competitive_bridge_layers)
         if self.tbsi_loc is not None and type(self.tbsi_loc) == list:
             for i in range(len(self.tbsi_loc)):
                 use_sd_layer = use_signal_decouple and (
@@ -231,6 +237,8 @@ class VisionTransformerTBSI(BaseBackbone):
                     len(template_conditioned_bridge_layers) == 0 or i in template_conditioned_bridge_layers)
                 use_cfs_layer = use_cfs_reliability_bridge and (
                     len(cfs_reliability_bridge_layers) == 0 or i in cfs_reliability_bridge_layers)
+                use_comp_layer = use_competitive_bridge and (
+                    len(competitive_bridge_layers) == 0 or i in competitive_bridge_layers)
                 layer_scale = (signal_decouple_layer_scales[i]
                                if i < len(signal_decouple_layer_scales)
                                else signal_decouple_scale)
@@ -257,7 +265,9 @@ class VisionTransformerTBSI(BaseBackbone):
                 template_conditioned_bridge_neg_floor=template_conditioned_bridge_neg_floor,
                 use_cfs_reliability_bridge=use_cfs_layer,
                 cfs_reliability_bridge_scale=cfs_reliability_bridge_scale,
-                cfs_reliability_bridge_hidden=cfs_reliability_bridge_hidden))
+                cfs_reliability_bridge_hidden=cfs_reliability_bridge_hidden,
+                use_competitive_bridge=use_comp_layer,
+                competitive_bridge_temperature=competitive_bridge_temperature))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()

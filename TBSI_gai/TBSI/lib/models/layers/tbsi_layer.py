@@ -674,6 +674,31 @@ class CFSReliabilityBridgeBias(nn.Module):
         return self.scale * bias.transpose(1, 2)
 
 
+class CompetitiveBridgeFusion(nn.Module):
+    """
+    Competitive RGB/TIR search-to-template bridge fusion.
+
+    TBSI computes two s2t interactions independently. This module computes a
+    per-template-token modality budget from the two s2t affinity distributions
+    and fuses the two candidate template updates before t2s propagation.
+    """
+    def __init__(self, temperature=1.0):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, fused_template, x_v_search, x_i_search):
+        dim = fused_template.shape[-1]
+        q = fused_template
+        logits_v = (q @ x_v_search.transpose(-2, -1)) / math.sqrt(dim)
+        logits_i = (q @ x_i_search.transpose(-2, -1)) / math.sqrt(dim)
+        score_v = torch.logsumexp(logits_v, dim=-1, keepdim=True)
+        score_i = torch.logsumexp(logits_i, dim=-1, keepdim=True)
+        weights = F.softmax(
+            self.temperature * torch.cat([score_i, score_v], dim=-1),
+            dim=-1)
+        return weights[:, :, 0:1], weights[:, :, 1:2]
+
+
 class OutputResidualGate(nn.Module):
     """
     Delta-level adapter after TBSI interaction outputs.
@@ -762,7 +787,9 @@ class TBSILayer(nn.Module):
                  template_conditioned_bridge_neg_floor=-0.3,
                  use_cfs_reliability_bridge=False,
                  cfs_reliability_bridge_scale=0.2,
-                 cfs_reliability_bridge_hidden=32):
+                 cfs_reliability_bridge_hidden=32,
+                 use_competitive_bridge=False,
+                 competitive_bridge_temperature=1.0):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -772,6 +799,7 @@ class TBSILayer(nn.Module):
         self.use_output_residual_gate = use_output_residual_gate
         self.use_template_conditioned_bridge = use_template_conditioned_bridge
         self.use_cfs_reliability_bridge = use_cfs_reliability_bridge
+        self.use_competitive_bridge = use_competitive_bridge
 
         self.t_fusion = nn.Sequential(
             nn.Linear(dim * 2, dim),
@@ -840,6 +868,12 @@ class TBSILayer(nn.Module):
             print(f"  [CFSReliabilityBridge] Cross-modal feature-structure bridge bias active "
                   f"({rp} params, scale={cfs_reliability_bridge_scale}, "
                   f"hidden={cfs_reliability_bridge_hidden}, zero-init)")
+
+        if use_competitive_bridge:
+            self.competitive_bridge = CompetitiveBridgeFusion(
+                temperature=competitive_bridge_temperature)
+            print(f"  [CompetitiveBridge] RGB/TIR s2t competition active "
+                  f"(temperature={competitive_bridge_temperature}, 0 params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
@@ -949,14 +983,27 @@ class TBSILayer(nn.Module):
             tcb_bias_v = cfs_bias if tcb_bias_v is None else tcb_bias_v + cfs_bias
 
         # 4 CASTBlocks (quality-guided cross-attention, using decoupled signal)
-        fused_t_attn = self.ca_s2t_i2f(torch.cat([fused_t_attn, x_i_orig], dim=1),
-                                       quality_mask=qm_i, attn_bias=tcb_bias_i)[:, :lens_z, :]
-        temp_x_v = self.ca_t2s_f2v(torch.cat([fused_t_attn, x_v_orig], dim=1),
-                                   quality_mask=qm_v)[:, lens_z:, :]
-        fused_t_attn = self.ca_s2t_v2f(torch.cat([fused_t_attn, x_v_orig], dim=1),
-                                       quality_mask=qm_v, attn_bias=tcb_bias_v)[:, :lens_z, :]
-        temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t_attn, x_i_orig], dim=1),
-                                   quality_mask=qm_i)[:, lens_z:, :]
+        if self.use_competitive_bridge:
+            comp_i, comp_v = self.competitive_bridge(fused_t_attn, x_v_orig, x_i_orig)
+            fused_i = self.ca_s2t_i2f(torch.cat([fused_t_attn, x_i_orig], dim=1),
+                                      quality_mask=qm_i, attn_bias=tcb_bias_i)[:, :lens_z, :]
+            fused_v = self.ca_s2t_v2f(torch.cat([fused_t_attn, x_v_orig], dim=1),
+                                      quality_mask=qm_v, attn_bias=tcb_bias_v)[:, :lens_z, :]
+            fused_t_attn = comp_i * fused_i + comp_v * fused_v
+            search_quality_signal = torch.cat([comp_v.mean(dim=1), comp_i.mean(dim=1)], dim=-1)
+            temp_x_v = self.ca_t2s_f2v(torch.cat([fused_t_attn, x_v_orig], dim=1),
+                                       quality_mask=qm_v)[:, lens_z:, :]
+            temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t_attn, x_i_orig], dim=1),
+                                       quality_mask=qm_i)[:, lens_z:, :]
+        else:
+            fused_t_attn = self.ca_s2t_i2f(torch.cat([fused_t_attn, x_i_orig], dim=1),
+                                           quality_mask=qm_i, attn_bias=tcb_bias_i)[:, :lens_z, :]
+            temp_x_v = self.ca_t2s_f2v(torch.cat([fused_t_attn, x_v_orig], dim=1),
+                                       quality_mask=qm_v)[:, lens_z:, :]
+            fused_t_attn = self.ca_s2t_v2f(torch.cat([fused_t_attn, x_v_orig], dim=1),
+                                           quality_mask=qm_v, attn_bias=tcb_bias_v)[:, :lens_z, :]
+            temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t_attn, x_i_orig], dim=1),
+                                       quality_mask=qm_i)[:, lens_z:, :]
 
         output_gate_signal = None
         if self.use_output_residual_gate:
