@@ -1,5 +1,10 @@
 data/
 output/
+!TBSI_gai/TBSI/output/
+TBSI_gai/TBSI/output/*
+!TBSI_gai/TBSI/output/experiments/
+TBSI_gai/TBSI/output/experiments/*
+!TBSI_gai/TBSI/output/experiments/**
 pretrained/
 *.pth
 *.tar
