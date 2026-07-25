@@ -71,6 +71,10 @@ cfg.MODEL.OUTPUT_RESIDUAL_GATE = False  # Delta-level adapter after TBSI interac
 cfg.MODEL.OUTPUT_RESIDUAL_GATE_LAYERS = []  # TBSI layer indices to enable; empty means all TBSI layers
 cfg.MODEL.OUTPUT_RESIDUAL_GATE_MODE = "naive"  # naive | reliability | reliability_template
 cfg.MODEL.OUTPUT_RESIDUAL_GATE_SCALE = 1.0  # Residual injection scale for the output gate
+cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE = False  # Pre-softmax template-conditioned bridge attention bias
+cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_LAYERS = []  # TBSI layer indices; empty means all TBSI layers
+cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_SCALE = 0.2  # Logit-bias scale for target-related search keys
+cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_TEMPERATURE = 4.0  # Sharpness for template-search relevance
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 

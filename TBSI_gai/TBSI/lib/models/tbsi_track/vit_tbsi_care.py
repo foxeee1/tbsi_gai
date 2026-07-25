@@ -134,7 +134,11 @@ class VisionTransformerTBSI(BaseBackbone):
                  use_output_residual_gate=False,
                  output_residual_gate_layers=None,
                  output_residual_gate_mode="naive",
-                 output_residual_gate_scale=1.0):
+                 output_residual_gate_scale=1.0,
+                 use_template_conditioned_bridge=False,
+                 template_conditioned_bridge_layers=None,
+                 template_conditioned_bridge_scale=0.2,
+                 template_conditioned_bridge_temperature=4.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -191,6 +195,7 @@ class VisionTransformerTBSI(BaseBackbone):
         self.use_soft_search_reliability = use_soft_search_reliability
         self.use_template_search_competition = use_template_search_competition
         self.use_output_residual_gate = use_output_residual_gate
+        self.use_template_conditioned_bridge = use_template_conditioned_bridge
         self.signal_decouple_mode = signal_decouple_mode
         signal_decouple_layers = signal_decouple_layers or []
         signal_decouple_layers = set(signal_decouple_layers)
@@ -201,6 +206,8 @@ class VisionTransformerTBSI(BaseBackbone):
         template_search_competition_layers = set(template_search_competition_layers)
         output_residual_gate_layers = output_residual_gate_layers or []
         output_residual_gate_layers = set(output_residual_gate_layers)
+        template_conditioned_bridge_layers = template_conditioned_bridge_layers or []
+        template_conditioned_bridge_layers = set(template_conditioned_bridge_layers)
         if self.tbsi_loc is not None and type(self.tbsi_loc) == list:
             for i in range(len(self.tbsi_loc)):
                 use_sd_layer = use_signal_decouple and (
@@ -211,6 +218,8 @@ class VisionTransformerTBSI(BaseBackbone):
                     len(template_search_competition_layers) == 0 or i in template_search_competition_layers)
                 use_org_layer = use_output_residual_gate and (
                     len(output_residual_gate_layers) == 0 or i in output_residual_gate_layers)
+                use_tcb_layer = use_template_conditioned_bridge and (
+                    len(template_conditioned_bridge_layers) == 0 or i in template_conditioned_bridge_layers)
                 layer_scale = (signal_decouple_layer_scales[i]
                                if i < len(signal_decouple_layer_scales)
                                else signal_decouple_scale)
@@ -229,7 +238,10 @@ class VisionTransformerTBSI(BaseBackbone):
                 template_search_competition_temperature=template_search_competition_temperature,
                 use_output_residual_gate=use_org_layer,
                 output_residual_gate_mode=output_residual_gate_mode,
-                output_residual_gate_scale=output_residual_gate_scale))
+                output_residual_gate_scale=output_residual_gate_scale,
+                use_template_conditioned_bridge=use_tcb_layer,
+                template_conditioned_bridge_scale=template_conditioned_bridge_scale,
+                template_conditioned_bridge_temperature=template_conditioned_bridge_temperature))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()

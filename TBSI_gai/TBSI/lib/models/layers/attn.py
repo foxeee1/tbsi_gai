@@ -151,7 +151,7 @@ class Attention_st(nn.Module):
                                                                           relative_position_index.max() + 1)))
             trunc_normal_(self.relative_position_bias_table, std=0.02)
 
-    def forward(self, x, mask=None, return_attention=False, quality_mask=None):
+    def forward(self, x, mask=None, return_attention=False, quality_mask=None, attn_bias=None):
         """quality_mask: (B, N_search, 1) — per-search-token confidence in [0,1].
         [Phase 1 Fix] Applied as PRE-softmax logit bias (instead of post-softmax multiply).
         Principle: attention gates should operate in logit space, not probability space.
@@ -197,6 +197,9 @@ class Attention_st(nn.Module):
             elif self.mode == 't2s':
                 qm_bias = torch.log(quality_mask.clamp(min=1e-6))  # (B, 256, 1)
                 attn = attn + qm_bias
+
+        if attn_bias is not None:
+            attn = attn + attn_bias
 
         attn = attn.softmax(dim=-1)
 

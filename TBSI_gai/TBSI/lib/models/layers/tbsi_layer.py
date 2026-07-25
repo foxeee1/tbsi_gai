@@ -585,6 +585,28 @@ class TemplateSearchCompetition(nn.Module):
         ], dim=-1)
 
 
+class TemplateConditionedBridgeMask(nn.Module):
+    """
+    Pre-softmax template-conditioned bridge bias.
+
+    This module does not reweight features or outputs. It biases the attention
+    logits so target-related search tokens participate more strongly when the
+    fused template is updated in the bridge interaction.
+    """
+    def __init__(self, scale=0.2, temperature=4.0):
+        super().__init__()
+        self.scale = scale
+        self.temperature = temperature
+
+    def forward(self, x_search, fused_template):
+        template_anchor = F.normalize(fused_template.mean(dim=1, keepdim=True), dim=-1)
+        search_norm = F.normalize(x_search, dim=-1)
+        score = F.cosine_similarity(search_norm, template_anchor, dim=-1)
+        score = (score - score.mean(dim=1, keepdim=True)) / (
+            score.std(dim=1, keepdim=True) + 1e-6)
+        return self.scale * torch.tanh(self.temperature * score).unsqueeze(1)
+
+
 class OutputResidualGate(nn.Module):
     """
     Delta-level adapter after TBSI interaction outputs.
@@ -665,7 +687,10 @@ class TBSILayer(nn.Module):
                  template_search_competition_temperature=4.0,
                  use_output_residual_gate=False,
                  output_residual_gate_mode="naive",
-                 output_residual_gate_scale=1.0):
+                 output_residual_gate_scale=1.0,
+                 use_template_conditioned_bridge=False,
+                 template_conditioned_bridge_scale=0.2,
+                 template_conditioned_bridge_temperature=4.0):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -673,6 +698,7 @@ class TBSILayer(nn.Module):
         self.use_soft_search_reliability = use_soft_search_reliability
         self.use_template_search_competition = use_template_search_competition
         self.use_output_residual_gate = use_output_residual_gate
+        self.use_template_conditioned_bridge = use_template_conditioned_bridge
 
         self.t_fusion = nn.Sequential(
             nn.Linear(dim * 2, dim),
@@ -720,6 +746,14 @@ class TBSILayer(nn.Module):
             print(f"  [OutputResidualGate] Delta-level bridge output adapter active "
                   f"({rp} params, mode={output_residual_gate_mode}, "
                   f"scale={output_residual_gate_scale}, zero-init)")
+
+        if use_template_conditioned_bridge:
+            self.template_conditioned_bridge = TemplateConditionedBridgeMask(
+                scale=template_conditioned_bridge_scale,
+                temperature=template_conditioned_bridge_temperature)
+            print(f"  [TemplateConditionedBridge] Pre-softmax bridge bias active "
+                  f"(scale={template_conditioned_bridge_scale}, "
+                  f"temperature={template_conditioned_bridge_temperature})")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
@@ -819,13 +853,18 @@ class TBSILayer(nn.Module):
         elif self.use_template_search_competition:
             qm_v, qm_i = tsc_gate_v, tsc_gate_i
 
+        tcb_bias_v = tcb_bias_i = None
+        if self.use_template_conditioned_bridge:
+            tcb_bias_i = self.template_conditioned_bridge(x_i_orig, fused_t)
+            tcb_bias_v = self.template_conditioned_bridge(x_v_orig, fused_t)
+
         # 4 CASTBlocks (quality-guided cross-attention, using decoupled signal)
         fused_t_attn = self.ca_s2t_i2f(torch.cat([fused_t_attn, x_i_orig], dim=1),
-                                       quality_mask=qm_i)[:, :lens_z, :]
+                                       quality_mask=qm_i, attn_bias=tcb_bias_i)[:, :lens_z, :]
         temp_x_v = self.ca_t2s_f2v(torch.cat([fused_t_attn, x_v_orig], dim=1),
                                    quality_mask=qm_v)[:, lens_z:, :]
         fused_t_attn = self.ca_s2t_v2f(torch.cat([fused_t_attn, x_v_orig], dim=1),
-                                       quality_mask=qm_v)[:, :lens_z, :]
+                                       quality_mask=qm_v, attn_bias=tcb_bias_v)[:, :lens_z, :]
         temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t_attn, x_i_orig], dim=1),
                                    quality_mask=qm_i)[:, lens_z:, :]
 

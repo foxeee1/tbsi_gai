@@ -403,6 +403,11 @@ def build_tbsi_track(cfg, training=True):
         output_residual_gate_layers = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE_LAYERS", [])
         output_residual_gate_mode = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE_MODE", "naive")
         output_residual_gate_scale = getattr(cfg.MODEL, "OUTPUT_RESIDUAL_GATE_SCALE", 1.0)
+        use_template_conditioned_bridge = getattr(cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE", False)
+        template_conditioned_bridge_layers = getattr(cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_LAYERS", [])
+        template_conditioned_bridge_scale = getattr(cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_SCALE", 0.2)
+        template_conditioned_bridge_temperature = getattr(
+            cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_TEMPERATURE", 4.0)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -427,7 +432,11 @@ def build_tbsi_track(cfg, training=True):
                                             use_output_residual_gate=use_output_residual_gate,
                                             output_residual_gate_layers=output_residual_gate_layers,
                                             output_residual_gate_mode=output_residual_gate_mode,
-                                            output_residual_gate_scale=output_residual_gate_scale)
+                                            output_residual_gate_scale=output_residual_gate_scale,
+                                            use_template_conditioned_bridge=use_template_conditioned_bridge,
+                                            template_conditioned_bridge_layers=template_conditioned_bridge_layers,
+                                            template_conditioned_bridge_scale=template_conditioned_bridge_scale,
+                                            template_conditioned_bridge_temperature=template_conditioned_bridge_temperature)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -449,6 +458,12 @@ def build_tbsi_track(cfg, training=True):
             print(f'  [OutputResidualGate] Delta-level bridge output adapter enabled '
                   f'(layers={layer_msg}, mode={output_residual_gate_mode}, '
                   f'scale={output_residual_gate_scale})')
+        if use_template_conditioned_bridge:
+            layer_msg = ("all" if not template_conditioned_bridge_layers
+                         else list(template_conditioned_bridge_layers))
+            print(f'  [TemplateConditionedBridge] Pre-softmax bridge bias enabled '
+                  f'(layers={layer_msg}, scale={template_conditioned_bridge_scale}, '
+                  f'temperature={template_conditioned_bridge_temperature})')
     else:
         raise NotImplementedError
 

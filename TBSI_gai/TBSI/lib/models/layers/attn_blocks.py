@@ -149,10 +149,12 @@ class CASTBlock(nn.Module):
         if use_attn_gate:
             self.attn_gate = nn.Parameter(torch.tensor(1.0))
 
-    def forward(self, x, mask=None, quality_mask=None):
+    def forward(self, x, mask=None, quality_mask=None, attn_bias=None):
         if self.use_attn_gate:
-            x = x + self.drop_path(self.attn_gate * self.attn_reshape(self.norm1(x), mask, quality_mask=quality_mask))
+            x = x + self.drop_path(self.attn_gate * self.attn_reshape(
+                self.norm1(x), mask, quality_mask=quality_mask, attn_bias=attn_bias))
         else:
-            x = x + self.drop_path(self.attn_reshape(self.norm1(x), mask, quality_mask=quality_mask))
+            x = x + self.drop_path(self.attn_reshape(
+                self.norm1(x), mask, quality_mask=quality_mask, attn_bias=attn_bias))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
