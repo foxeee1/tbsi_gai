@@ -408,6 +408,8 @@ def build_tbsi_track(cfg, training=True):
         template_conditioned_bridge_scale = getattr(cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_SCALE", 0.2)
         template_conditioned_bridge_temperature = getattr(
             cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_TEMPERATURE", 4.0)
+        template_conditioned_bridge_bias_mode = getattr(
+            cfg.MODEL, "TEMPLATE_CONDITIONED_BRIDGE_BIAS_MODE", "signed")
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -436,7 +438,8 @@ def build_tbsi_track(cfg, training=True):
                                             use_template_conditioned_bridge=use_template_conditioned_bridge,
                                             template_conditioned_bridge_layers=template_conditioned_bridge_layers,
                                             template_conditioned_bridge_scale=template_conditioned_bridge_scale,
-                                            template_conditioned_bridge_temperature=template_conditioned_bridge_temperature)
+                                            template_conditioned_bridge_temperature=template_conditioned_bridge_temperature,
+                                            template_conditioned_bridge_bias_mode=template_conditioned_bridge_bias_mode)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -463,7 +466,8 @@ def build_tbsi_track(cfg, training=True):
                          else list(template_conditioned_bridge_layers))
             print(f'  [TemplateConditionedBridge] Pre-softmax bridge bias enabled '
                   f'(layers={layer_msg}, scale={template_conditioned_bridge_scale}, '
-                  f'temperature={template_conditioned_bridge_temperature})')
+                  f'temperature={template_conditioned_bridge_temperature}, '
+                  f'bias_mode={template_conditioned_bridge_bias_mode})')
     else:
         raise NotImplementedError
 

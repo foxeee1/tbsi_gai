@@ -75,6 +75,7 @@ cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE = False  # Pre-softmax template-conditione
 cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_LAYERS = []  # TBSI layer indices; empty means all TBSI layers
 cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_SCALE = 0.2  # Logit-bias scale for target-related search keys
 cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_TEMPERATURE = 4.0  # Sharpness for template-search relevance
+cfg.MODEL.TEMPLATE_CONDITIONED_BRIDGE_BIAS_MODE = "signed"  # signed | positive
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 

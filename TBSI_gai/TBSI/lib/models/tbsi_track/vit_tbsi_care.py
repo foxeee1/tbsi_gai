@@ -138,7 +138,8 @@ class VisionTransformerTBSI(BaseBackbone):
                  use_template_conditioned_bridge=False,
                  template_conditioned_bridge_layers=None,
                  template_conditioned_bridge_scale=0.2,
-                 template_conditioned_bridge_temperature=4.0):
+                 template_conditioned_bridge_temperature=4.0,
+                 template_conditioned_bridge_bias_mode="signed"):
         """
         Args:
             img_size (int, tuple): input image size
@@ -241,7 +242,8 @@ class VisionTransformerTBSI(BaseBackbone):
                 output_residual_gate_scale=output_residual_gate_scale,
                 use_template_conditioned_bridge=use_tcb_layer,
                 template_conditioned_bridge_scale=template_conditioned_bridge_scale,
-                template_conditioned_bridge_temperature=template_conditioned_bridge_temperature))
+                template_conditioned_bridge_temperature=template_conditioned_bridge_temperature,
+                template_conditioned_bridge_bias_mode=template_conditioned_bridge_bias_mode))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()

@@ -593,10 +593,11 @@ class TemplateConditionedBridgeMask(nn.Module):
     logits so target-related search tokens participate more strongly when the
     fused template is updated in the bridge interaction.
     """
-    def __init__(self, scale=0.2, temperature=4.0):
+    def __init__(self, scale=0.2, temperature=4.0, bias_mode="signed"):
         super().__init__()
         self.scale = scale
         self.temperature = temperature
+        self.bias_mode = bias_mode
 
     def forward(self, x_search, fused_template):
         template_anchor = F.normalize(fused_template.mean(dim=1, keepdim=True), dim=-1)
@@ -604,7 +605,11 @@ class TemplateConditionedBridgeMask(nn.Module):
         score = F.cosine_similarity(search_norm, template_anchor, dim=-1)
         score = (score - score.mean(dim=1, keepdim=True)) / (
             score.std(dim=1, keepdim=True) + 1e-6)
-        return self.scale * torch.tanh(self.temperature * score).unsqueeze(1)
+        if self.bias_mode == "positive":
+            bias = F.relu(score)
+        else:
+            bias = torch.tanh(self.temperature * score)
+        return self.scale * bias.unsqueeze(1)
 
 
 class OutputResidualGate(nn.Module):
@@ -690,7 +695,8 @@ class TBSILayer(nn.Module):
                  output_residual_gate_scale=1.0,
                  use_template_conditioned_bridge=False,
                  template_conditioned_bridge_scale=0.2,
-                 template_conditioned_bridge_temperature=4.0):
+                 template_conditioned_bridge_temperature=4.0,
+                 template_conditioned_bridge_bias_mode="signed"):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -750,10 +756,12 @@ class TBSILayer(nn.Module):
         if use_template_conditioned_bridge:
             self.template_conditioned_bridge = TemplateConditionedBridgeMask(
                 scale=template_conditioned_bridge_scale,
-                temperature=template_conditioned_bridge_temperature)
+                temperature=template_conditioned_bridge_temperature,
+                bias_mode=template_conditioned_bridge_bias_mode)
             print(f"  [TemplateConditionedBridge] Pre-softmax bridge bias active "
                   f"(scale={template_conditioned_bridge_scale}, "
-                  f"temperature={template_conditioned_bridge_temperature})")
+                  f"temperature={template_conditioned_bridge_temperature}, "
+                  f"bias_mode={template_conditioned_bridge_bias_mode})")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
