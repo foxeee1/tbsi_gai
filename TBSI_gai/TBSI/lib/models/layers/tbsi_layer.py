@@ -699,21 +699,12 @@ class CompetitiveBridgeFusion(nn.Module):
         return weights[:, :, 0:1], weights[:, :, 1:2]
 
 
-class FrequencyGateBias(nn.Module):
-    """
-    Spatial-frequency guided token bias for RGB/TIR bridge attention.
-
-    The search tokens are reshaped to a square grid. A 2D FFT low-pass
-    reconstruction estimates local low-frequency dominance per token. TIR uses
-    low-frequency dominance as positive evidence, while RGB uses high-frequency
-    dominance as positive evidence.
-    """
-    def __init__(self, scale=0.1, cutoff=0.25):
+class SpatialFrequencyRatio(nn.Module):
+    def __init__(self, cutoff=0.25):
         super().__init__()
-        self.scale = scale
         self.cutoff = cutoff
 
-    def _low_freq_ratio(self, x):
+    def low_freq_ratio(self, x):
         bsz, num_tokens, dim = x.shape
         side = int(math.sqrt(num_tokens))
         if side * side != num_tokens:
@@ -736,17 +727,52 @@ class FrequencyGateBias(nn.Module):
         return ratio.view(bsz, num_tokens, 1).transpose(1, 2)
 
     @staticmethod
-    def _normalize(raw):
+    def normalize(raw):
         centered = raw - raw.mean(dim=-1, keepdim=True)
         scale = raw.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
         return centered / scale
 
+
+class FrequencyGateBias(SpatialFrequencyRatio):
+    """
+    Spatial-frequency guided token bias for RGB/TIR bridge attention.
+
+    The search tokens are reshaped to a square grid. A 2D FFT low-pass
+    reconstruction estimates local low-frequency dominance per token. TIR uses
+    low-frequency dominance as positive evidence, while RGB uses high-frequency
+    dominance as positive evidence.
+    """
+    def __init__(self, scale=0.1, cutoff=0.25):
+        super().__init__(cutoff=cutoff)
+        self.scale = scale
+
     def forward(self, x_rgb_search, x_tir_search):
-        r_rgb = self._low_freq_ratio(x_rgb_search)
-        r_tir = self._low_freq_ratio(x_tir_search)
-        tir_bias = torch.tanh(self._normalize(2.0 * r_tir - 1.0))
-        rgb_bias = torch.tanh(self._normalize(1.0 - 2.0 * r_rgb))
+        r_rgb = self.low_freq_ratio(x_rgb_search)
+        r_tir = self.low_freq_ratio(x_tir_search)
+        tir_bias = torch.tanh(self.normalize(2.0 * r_tir - 1.0))
+        rgb_bias = torch.tanh(self.normalize(1.0 - 2.0 * r_rgb))
         return self.scale * rgb_bias, self.scale * tir_bias
+
+
+class FrequencyConsistencyBias(SpatialFrequencyRatio):
+    """
+    Cross-modal frequency-consistency conflict suppression.
+
+    RGB and TIR observe the same target region, so large spatial-frequency
+    disagreement at a search token is treated as conflict evidence. Only
+    above-average disagreements receive a negative pre-softmax bias.
+    """
+    def __init__(self, scale=0.3, cutoff=0.25):
+        super().__init__(cutoff=cutoff)
+        self.scale = scale
+
+    def forward(self, x_rgb_search, x_tir_search):
+        r_rgb = self.low_freq_ratio(x_rgb_search)
+        r_tir = self.low_freq_ratio(x_tir_search)
+        diff = (r_rgb - r_tir).abs()
+        penalty = F.relu(self.normalize(diff))
+        bias = -self.scale * penalty
+        return bias, bias
 
 
 class OutputResidualGate(nn.Module):
@@ -843,7 +869,10 @@ class TBSILayer(nn.Module):
                  competitive_bridge_residual_scale=1.0,
                  use_freq_gate=False,
                  freq_gate_scale=0.1,
-                 freq_gate_cutoff=0.25):
+                 freq_gate_cutoff=0.25,
+                 use_freq_consistency=False,
+                 freq_consistency_scale=0.3,
+                 freq_consistency_cutoff=0.25):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -855,6 +884,7 @@ class TBSILayer(nn.Module):
         self.use_cfs_reliability_bridge = use_cfs_reliability_bridge
         self.use_competitive_bridge = use_competitive_bridge
         self.use_freq_gate = use_freq_gate
+        self.use_freq_consistency = use_freq_consistency
         self.competitive_bridge_residual_scale = competitive_bridge_residual_scale
 
         self.t_fusion = nn.Sequential(
@@ -938,6 +968,13 @@ class TBSILayer(nn.Module):
                 cutoff=freq_gate_cutoff)
             print(f"  [FreqGATE] Spatial-frequency bridge bias active "
                   f"(scale={freq_gate_scale}, cutoff={freq_gate_cutoff}, 0 params)")
+
+        if use_freq_consistency:
+            self.freq_consistency = FrequencyConsistencyBias(
+                scale=freq_consistency_scale,
+                cutoff=freq_consistency_cutoff)
+            print(f"  [FCC] Cross-modal frequency-consistency bridge bias active "
+                  f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, 0 params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
@@ -1049,6 +1086,10 @@ class TBSILayer(nn.Module):
             freq_bias_v, freq_bias_i = self.freq_gate(x_v_orig, x_i_orig)
             tcb_bias_i = freq_bias_i if tcb_bias_i is None else tcb_bias_i + freq_bias_i
             tcb_bias_v = freq_bias_v if tcb_bias_v is None else tcb_bias_v + freq_bias_v
+        if self.use_freq_consistency:
+            fcc_bias_v, fcc_bias_i = self.freq_consistency(x_v_orig, x_i_orig)
+            tcb_bias_i = fcc_bias_i if tcb_bias_i is None else tcb_bias_i + fcc_bias_i
+            tcb_bias_v = fcc_bias_v if tcb_bias_v is None else tcb_bias_v + fcc_bias_v
 
         # 4 CASTBlocks (quality-guided cross-attention, using decoupled signal)
         if self.use_competitive_bridge:

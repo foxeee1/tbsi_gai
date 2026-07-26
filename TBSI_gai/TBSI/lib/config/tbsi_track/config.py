@@ -89,6 +89,10 @@ cfg.MODEL.FREQ_GATE = False  # Frequency-gated attention modulation for RGB/TIR 
 cfg.MODEL.FREQ_GATE_LAYERS = []  # TBSI layer indices; empty means all TBSI layers
 cfg.MODEL.FREQ_GATE_SCALE = 0.1  # Conservative pre-softmax logit-bias scale
 cfg.MODEL.FREQ_GATE_CUTOFF = 0.25  # Low-frequency radius on the search-token FFT grid
+cfg.MODEL.FREQ_CONSISTENCY = False  # Cross-modal frequency-consistency conflict suppression
+cfg.MODEL.FREQ_CONSISTENCY_LAYERS = []  # TBSI layer indices; empty means all TBSI layers
+cfg.MODEL.FREQ_CONSISTENCY_SCALE = 0.3  # Negative logit-bias scale for inconsistent search tokens
+cfg.MODEL.FREQ_CONSISTENCY_CUTOFF = 0.25  # Low-frequency radius on the search-token FFT grid
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 

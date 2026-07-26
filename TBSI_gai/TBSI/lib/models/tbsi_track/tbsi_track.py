@@ -424,6 +424,10 @@ def build_tbsi_track(cfg, training=True):
         freq_gate_layers = getattr(cfg.MODEL, "FREQ_GATE_LAYERS", [])
         freq_gate_scale = getattr(cfg.MODEL, "FREQ_GATE_SCALE", 0.1)
         freq_gate_cutoff = getattr(cfg.MODEL, "FREQ_GATE_CUTOFF", 0.25)
+        use_freq_consistency = getattr(cfg.MODEL, "FREQ_CONSISTENCY", False)
+        freq_consistency_layers = getattr(cfg.MODEL, "FREQ_CONSISTENCY_LAYERS", [])
+        freq_consistency_scale = getattr(cfg.MODEL, "FREQ_CONSISTENCY_SCALE", 0.3)
+        freq_consistency_cutoff = getattr(cfg.MODEL, "FREQ_CONSISTENCY_CUTOFF", 0.25)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -466,7 +470,11 @@ def build_tbsi_track(cfg, training=True):
                                             use_freq_gate=use_freq_gate,
                                             freq_gate_layers=freq_gate_layers,
                                             freq_gate_scale=freq_gate_scale,
-                                            freq_gate_cutoff=freq_gate_cutoff)
+                                            freq_gate_cutoff=freq_gate_cutoff,
+                                            use_freq_consistency=use_freq_consistency,
+                                            freq_consistency_layers=freq_consistency_layers,
+                                            freq_consistency_scale=freq_consistency_scale,
+                                            freq_consistency_cutoff=freq_consistency_cutoff)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -510,6 +518,11 @@ def build_tbsi_track(cfg, training=True):
             layer_msg = "all" if not freq_gate_layers else list(freq_gate_layers)
             print(f'  [FreqGATE] Spatial-frequency bridge bias enabled '
                   f'(layers={layer_msg}, scale={freq_gate_scale}, cutoff={freq_gate_cutoff})')
+        if use_freq_consistency:
+            layer_msg = "all" if not freq_consistency_layers else list(freq_consistency_layers)
+            print(f'  [FCC] Cross-modal frequency-consistency bridge bias enabled '
+                  f'(layers={layer_msg}, scale={freq_consistency_scale}, '
+                  f'cutoff={freq_consistency_cutoff})')
     else:
         raise NotImplementedError
 
