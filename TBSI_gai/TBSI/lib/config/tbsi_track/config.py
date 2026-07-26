@@ -96,6 +96,7 @@ cfg.MODEL.FREQ_CONSISTENCY_CUTOFF = 0.25  # Low-frequency radius on the search-t
 cfg.MODEL.FREQ_CONSISTENCY_MODE = "global"  # global | local_anomaly
 cfg.MODEL.FREQ_CONSISTENCY_LOCAL_KERNEL = 3  # Neighborhood size for local anomaly FCC
 cfg.MODEL.FREQ_CONSISTENCY_MARGIN = 0.0  # Suppress only disagreements above mean + margin * std
+cfg.MODEL.FREQ_CONSISTENCY_LEARNABLE_SCALE = False  # Learn one FCC bias scale per enabled TBSI layer
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 

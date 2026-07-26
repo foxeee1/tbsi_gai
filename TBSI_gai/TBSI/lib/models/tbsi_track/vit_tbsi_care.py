@@ -159,7 +159,8 @@ class VisionTransformerTBSI(BaseBackbone):
                  freq_consistency_cutoff=0.25,
                  freq_consistency_mode="global",
                  freq_consistency_local_kernel=3,
-                 freq_consistency_margin=0.0):
+                 freq_consistency_margin=0.0,
+                 freq_consistency_learnable_scale=False):
         """
         Args:
             img_size (int, tuple): input image size
@@ -299,7 +300,8 @@ class VisionTransformerTBSI(BaseBackbone):
                 freq_consistency_cutoff=freq_consistency_cutoff,
                 freq_consistency_mode=freq_consistency_mode,
                 freq_consistency_local_kernel=freq_consistency_local_kernel,
-                freq_consistency_margin=freq_consistency_margin))
+                freq_consistency_margin=freq_consistency_margin,
+                freq_consistency_learnable_scale=freq_consistency_learnable_scale))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()

@@ -765,9 +765,14 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
     disagreement at a search token is treated as conflict evidence. Only
     above-average disagreements receive a negative pre-softmax bias.
     """
-    def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3, margin=0.0):
+    def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3, margin=0.0,
+                 learnable_scale=False):
         super().__init__(cutoff=cutoff)
-        self.scale = scale
+        self.learnable_scale = learnable_scale
+        if learnable_scale:
+            self.scale = nn.Parameter(torch.tensor(float(scale)))
+        else:
+            self.scale = float(scale)
         self.mode = mode
         self.local_kernel = local_kernel
         self.margin = margin
@@ -811,7 +816,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
                 "pid": os.getpid(),
                 "sequence": seq_name,
                 "mode": self.mode,
-                "scale": self.scale,
+                "scale": float(self.scale.detach().item() if torch.is_tensor(self.scale) else self.scale),
                 "cutoff": self.cutoff,
                 "local_kernel": self.local_kernel,
                 "margin": self.margin,
@@ -836,7 +841,8 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
         elif self.mode != "global":
             raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
         penalty = F.relu(self.normalize(diff) - self.margin)
-        bias = -self.scale * penalty
+        scale = self.scale.clamp_min(0.0) if torch.is_tensor(self.scale) else self.scale
+        bias = -scale * penalty
         self._maybe_dump_diag(r_rgb, r_tir, diff, penalty, bias)
         return bias, bias
 
@@ -941,7 +947,8 @@ class TBSILayer(nn.Module):
                  freq_consistency_cutoff=0.25,
                  freq_consistency_mode="global",
                  freq_consistency_local_kernel=3,
-                 freq_consistency_margin=0.0):
+                 freq_consistency_margin=0.0,
+                 freq_consistency_learnable_scale=False):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -1044,11 +1051,14 @@ class TBSILayer(nn.Module):
                 cutoff=freq_consistency_cutoff,
                 mode=freq_consistency_mode,
                 local_kernel=freq_consistency_local_kernel,
-                margin=freq_consistency_margin)
+                margin=freq_consistency_margin,
+                learnable_scale=freq_consistency_learnable_scale)
+            rp = sum(p.numel() for p in self.freq_consistency.parameters())
             print(f"  [FCC] Cross-modal frequency-consistency bridge bias active "
                   f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, "
                   f"mode={freq_consistency_mode}, kernel={freq_consistency_local_kernel}, "
-                  f"margin={freq_consistency_margin}, 0 params)")
+                  f"margin={freq_consistency_margin}, learnable_scale={freq_consistency_learnable_scale}, "
+                  f"{rp} params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
