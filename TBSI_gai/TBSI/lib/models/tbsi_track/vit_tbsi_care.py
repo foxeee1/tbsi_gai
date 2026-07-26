@@ -148,7 +148,11 @@ class VisionTransformerTBSI(BaseBackbone):
                  use_competitive_bridge=False,
                  competitive_bridge_layers=None,
                  competitive_bridge_temperature=1.0,
-                 competitive_bridge_residual_scale=1.0):
+                 competitive_bridge_residual_scale=1.0,
+                 use_freq_gate=False,
+                 freq_gate_layers=None,
+                 freq_gate_scale=0.1,
+                 freq_gate_cutoff=0.25):
         """
         Args:
             img_size (int, tuple): input image size
@@ -208,6 +212,7 @@ class VisionTransformerTBSI(BaseBackbone):
         self.use_template_conditioned_bridge = use_template_conditioned_bridge
         self.use_cfs_reliability_bridge = use_cfs_reliability_bridge
         self.use_competitive_bridge = use_competitive_bridge
+        self.use_freq_gate = use_freq_gate
         self.signal_decouple_mode = signal_decouple_mode
         signal_decouple_layers = signal_decouple_layers or []
         signal_decouple_layers = set(signal_decouple_layers)
@@ -224,6 +229,8 @@ class VisionTransformerTBSI(BaseBackbone):
         cfs_reliability_bridge_layers = set(cfs_reliability_bridge_layers)
         competitive_bridge_layers = competitive_bridge_layers or []
         competitive_bridge_layers = set(competitive_bridge_layers)
+        freq_gate_layers = freq_gate_layers or []
+        freq_gate_layers = set(freq_gate_layers)
         if self.tbsi_loc is not None and type(self.tbsi_loc) == list:
             for i in range(len(self.tbsi_loc)):
                 use_sd_layer = use_signal_decouple and (
@@ -240,6 +247,8 @@ class VisionTransformerTBSI(BaseBackbone):
                     len(cfs_reliability_bridge_layers) == 0 or i in cfs_reliability_bridge_layers)
                 use_comp_layer = use_competitive_bridge and (
                     len(competitive_bridge_layers) == 0 or i in competitive_bridge_layers)
+                use_freq_layer = use_freq_gate and (
+                    len(freq_gate_layers) == 0 or i in freq_gate_layers)
                 layer_scale = (signal_decouple_layer_scales[i]
                                if i < len(signal_decouple_layer_scales)
                                else signal_decouple_scale)
@@ -269,7 +278,10 @@ class VisionTransformerTBSI(BaseBackbone):
                 cfs_reliability_bridge_hidden=cfs_reliability_bridge_hidden,
                 use_competitive_bridge=use_comp_layer,
                 competitive_bridge_temperature=competitive_bridge_temperature,
-                competitive_bridge_residual_scale=competitive_bridge_residual_scale))
+                competitive_bridge_residual_scale=competitive_bridge_residual_scale,
+                use_freq_gate=use_freq_layer,
+                freq_gate_scale=freq_gate_scale,
+                freq_gate_cutoff=freq_gate_cutoff))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()

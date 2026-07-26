@@ -699,6 +699,56 @@ class CompetitiveBridgeFusion(nn.Module):
         return weights[:, :, 0:1], weights[:, :, 1:2]
 
 
+class FrequencyGateBias(nn.Module):
+    """
+    Spatial-frequency guided token bias for RGB/TIR bridge attention.
+
+    The search tokens are reshaped to a square grid. A 2D FFT low-pass
+    reconstruction estimates local low-frequency dominance per token. TIR uses
+    low-frequency dominance as positive evidence, while RGB uses high-frequency
+    dominance as positive evidence.
+    """
+    def __init__(self, scale=0.1, cutoff=0.25):
+        super().__init__()
+        self.scale = scale
+        self.cutoff = cutoff
+
+    def _low_freq_ratio(self, x):
+        bsz, num_tokens, dim = x.shape
+        side = int(math.sqrt(num_tokens))
+        if side * side != num_tokens:
+            return x.new_zeros(bsz, 1, num_tokens)
+
+        feat = x.view(bsz, side, side, dim)
+        spec = torch.fft.fft2(feat.float(), dim=(1, 2), norm="ortho")
+        fy = torch.fft.fftfreq(side, device=x.device)
+        fx = torch.fft.fftfreq(side, device=x.device)
+        yy, xx = torch.meshgrid(fy, fx, indexing="ij")
+        mask = (yy.square() + xx.square()).sqrt() <= self.cutoff
+        low = torch.fft.ifft2(
+            spec * mask.view(1, side, side, 1),
+            dim=(1, 2),
+            norm="ortho").real.to(dtype=x.dtype)
+
+        low_energy = low.square().mean(dim=-1, keepdim=True)
+        total_energy = feat.square().mean(dim=-1, keepdim=True).clamp_min(1e-6)
+        ratio = (low_energy / total_energy).clamp(0.0, 1.0)
+        return ratio.view(bsz, num_tokens, 1).transpose(1, 2)
+
+    @staticmethod
+    def _normalize(raw):
+        centered = raw - raw.mean(dim=-1, keepdim=True)
+        scale = raw.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
+        return centered / scale
+
+    def forward(self, x_rgb_search, x_tir_search):
+        r_rgb = self._low_freq_ratio(x_rgb_search)
+        r_tir = self._low_freq_ratio(x_tir_search)
+        tir_bias = torch.tanh(self._normalize(2.0 * r_tir - 1.0))
+        rgb_bias = torch.tanh(self._normalize(1.0 - 2.0 * r_rgb))
+        return self.scale * rgb_bias, self.scale * tir_bias
+
+
 class OutputResidualGate(nn.Module):
     """
     Delta-level adapter after TBSI interaction outputs.
@@ -790,7 +840,10 @@ class TBSILayer(nn.Module):
                  cfs_reliability_bridge_hidden=32,
                  use_competitive_bridge=False,
                  competitive_bridge_temperature=1.0,
-                 competitive_bridge_residual_scale=1.0):
+                 competitive_bridge_residual_scale=1.0,
+                 use_freq_gate=False,
+                 freq_gate_scale=0.1,
+                 freq_gate_cutoff=0.25):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -801,6 +854,7 @@ class TBSILayer(nn.Module):
         self.use_template_conditioned_bridge = use_template_conditioned_bridge
         self.use_cfs_reliability_bridge = use_cfs_reliability_bridge
         self.use_competitive_bridge = use_competitive_bridge
+        self.use_freq_gate = use_freq_gate
         self.competitive_bridge_residual_scale = competitive_bridge_residual_scale
 
         self.t_fusion = nn.Sequential(
@@ -877,6 +931,13 @@ class TBSILayer(nn.Module):
             print(f"  [CompetitiveBridge] RGB/TIR s2t competition active "
                   f"(temperature={competitive_bridge_temperature}, "
                   f"residual_scale={competitive_bridge_residual_scale}, 0 params)")
+
+        if use_freq_gate:
+            self.freq_gate = FrequencyGateBias(
+                scale=freq_gate_scale,
+                cutoff=freq_gate_cutoff)
+            print(f"  [FreqGATE] Spatial-frequency bridge bias active "
+                  f"(scale={freq_gate_scale}, cutoff={freq_gate_cutoff}, 0 params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
@@ -984,6 +1045,10 @@ class TBSILayer(nn.Module):
             cfs_bias = self.cfs_reliability_bridge(x_v_orig, x_i_orig)
             tcb_bias_i = cfs_bias if tcb_bias_i is None else tcb_bias_i + cfs_bias
             tcb_bias_v = cfs_bias if tcb_bias_v is None else tcb_bias_v + cfs_bias
+        if self.use_freq_gate:
+            freq_bias_v, freq_bias_i = self.freq_gate(x_v_orig, x_i_orig)
+            tcb_bias_i = freq_bias_i if tcb_bias_i is None else tcb_bias_i + freq_bias_i
+            tcb_bias_v = freq_bias_v if tcb_bias_v is None else tcb_bias_v + freq_bias_v
 
         # 4 CASTBlocks (quality-guided cross-attention, using decoupled signal)
         if self.use_competitive_bridge:

@@ -420,6 +420,10 @@ def build_tbsi_track(cfg, training=True):
         competitive_bridge_layers = getattr(cfg.MODEL, "COMPETITIVE_BRIDGE_LAYERS", [])
         competitive_bridge_temperature = getattr(cfg.MODEL, "COMPETITIVE_BRIDGE_TEMPERATURE", 1.0)
         competitive_bridge_residual_scale = getattr(cfg.MODEL, "COMPETITIVE_BRIDGE_RESIDUAL_SCALE", 1.0)
+        use_freq_gate = getattr(cfg.MODEL, "FREQ_GATE", False)
+        freq_gate_layers = getattr(cfg.MODEL, "FREQ_GATE_LAYERS", [])
+        freq_gate_scale = getattr(cfg.MODEL, "FREQ_GATE_SCALE", 0.1)
+        freq_gate_cutoff = getattr(cfg.MODEL, "FREQ_GATE_CUTOFF", 0.25)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -458,7 +462,11 @@ def build_tbsi_track(cfg, training=True):
                                             use_competitive_bridge=use_competitive_bridge,
                                             competitive_bridge_layers=competitive_bridge_layers,
                                             competitive_bridge_temperature=competitive_bridge_temperature,
-                                            competitive_bridge_residual_scale=competitive_bridge_residual_scale)
+                                            competitive_bridge_residual_scale=competitive_bridge_residual_scale,
+                                            use_freq_gate=use_freq_gate,
+                                            freq_gate_layers=freq_gate_layers,
+                                            freq_gate_scale=freq_gate_scale,
+                                            freq_gate_cutoff=freq_gate_cutoff)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -498,6 +506,10 @@ def build_tbsi_track(cfg, training=True):
             print(f'  [CompetitiveBridge] RGB/TIR s2t competition enabled '
                   f'(layers={layer_msg}, temperature={competitive_bridge_temperature}, '
                   f'residual_scale={competitive_bridge_residual_scale})')
+        if use_freq_gate:
+            layer_msg = "all" if not freq_gate_layers else list(freq_gate_layers)
+            print(f'  [FreqGATE] Spatial-frequency bridge bias enabled '
+                  f'(layers={layer_msg}, scale={freq_gate_scale}, cutoff={freq_gate_cutoff})')
     else:
         raise NotImplementedError
 
