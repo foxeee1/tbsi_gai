@@ -93,6 +93,8 @@ cfg.MODEL.FREQ_CONSISTENCY = False  # Cross-modal frequency-consistency conflict
 cfg.MODEL.FREQ_CONSISTENCY_LAYERS = []  # TBSI layer indices; empty means all TBSI layers
 cfg.MODEL.FREQ_CONSISTENCY_SCALE = 0.3  # Negative logit-bias scale for inconsistent search tokens
 cfg.MODEL.FREQ_CONSISTENCY_CUTOFF = 0.25  # Low-frequency radius on the search-token FFT grid
+cfg.MODEL.FREQ_CONSISTENCY_MODE = "global"  # global | local_anomaly
+cfg.MODEL.FREQ_CONSISTENCY_LOCAL_KERNEL = 3  # Neighborhood size for local anomaly FCC
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 

@@ -7,7 +7,10 @@ Supports DGSFusion — multiple router modes:
   v4: DiffProjRouter — learnable diff projection Linear(768→16) (v4-diffproj, ~12K params)
   v5: SelfQualityRouter — 自质量 (768→8) + 跨模态差异 (768→16) + per-token 4-way路由 (~25K params)
   v6: DiffTemplateRouter — 跨模态差异 + 模板对齐 search@temp + per-token 3-way路由 (~25K params)"""
+import json
 import math
+import os
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -762,16 +765,77 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
     disagreement at a search token is treated as conflict evidence. Only
     above-average disagreements receive a negative pre-softmax bias.
     """
-    def __init__(self, scale=0.3, cutoff=0.25):
+    def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3):
         super().__init__(cutoff=cutoff)
         self.scale = scale
+        self.mode = mode
+        self.local_kernel = local_kernel
+
+    @staticmethod
+    def _stats(tensor):
+        flat = tensor.detach().float().reshape(-1)
+        return {
+            "mean": float(flat.mean().item()),
+            "std": float(flat.std(unbiased=False).item()),
+            "min": float(flat.min().item()),
+            "max": float(flat.max().item()),
+        }
+
+    def _local_anomaly(self, diff):
+        bsz, _, num_tokens = diff.shape
+        side = int(math.sqrt(num_tokens))
+        if side * side != num_tokens:
+            return diff
+        grid = diff.view(bsz, 1, side, side)
+        kernel = max(1, int(self.local_kernel))
+        if kernel % 2 == 0:
+            kernel += 1
+        local_mean = F.avg_pool2d(
+            grid.float(),
+            kernel_size=kernel,
+            stride=1,
+            padding=kernel // 2,
+        ).to(dtype=diff.dtype)
+        return (grid - local_mean).view(bsz, 1, num_tokens)
+
+    def _maybe_dump_diag(self, r_rgb, r_tir, diff, penalty, bias):
+        diag_dir = os.environ.get("TBSI_FCC_DIAG_DIR", "")
+        if not diag_dir:
+            return
+        try:
+            os.makedirs(diag_dir, exist_ok=True)
+            seq_name = os.environ.get("TBSI_CURRENT_SEQUENCE", "unknown")
+            payload = {
+                "time": time.time(),
+                "pid": os.getpid(),
+                "sequence": seq_name,
+                "mode": self.mode,
+                "scale": self.scale,
+                "cutoff": self.cutoff,
+                "local_kernel": self.local_kernel,
+                "rgb_low_ratio": self._stats(r_rgb),
+                "tir_low_ratio": self._stats(r_tir),
+                "frequency_disagreement": self._stats(diff),
+                "penalty": self._stats(penalty),
+                "bias": self._stats(bias),
+            }
+            path = os.path.join(diag_dir, f"fcc_stats_{os.getpid()}.jsonl")
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def forward(self, x_rgb_search, x_tir_search):
         r_rgb = self.low_freq_ratio(x_rgb_search)
         r_tir = self.low_freq_ratio(x_tir_search)
         diff = (r_rgb - r_tir).abs()
+        if self.mode == "local_anomaly":
+            diff = self._local_anomaly(diff)
+        elif self.mode != "global":
+            raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
         penalty = F.relu(self.normalize(diff))
         bias = -self.scale * penalty
+        self._maybe_dump_diag(r_rgb, r_tir, diff, penalty, bias)
         return bias, bias
 
 
@@ -872,7 +936,9 @@ class TBSILayer(nn.Module):
                  freq_gate_cutoff=0.25,
                  use_freq_consistency=False,
                  freq_consistency_scale=0.3,
-                 freq_consistency_cutoff=0.25):
+                 freq_consistency_cutoff=0.25,
+                 freq_consistency_mode="global",
+                 freq_consistency_local_kernel=3):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -972,9 +1038,12 @@ class TBSILayer(nn.Module):
         if use_freq_consistency:
             self.freq_consistency = FrequencyConsistencyBias(
                 scale=freq_consistency_scale,
-                cutoff=freq_consistency_cutoff)
+                cutoff=freq_consistency_cutoff,
+                mode=freq_consistency_mode,
+                local_kernel=freq_consistency_local_kernel)
             print(f"  [FCC] Cross-modal frequency-consistency bridge bias active "
-                  f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, 0 params)")
+                  f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, "
+                  f"mode={freq_consistency_mode}, kernel={freq_consistency_local_kernel}, 0 params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,

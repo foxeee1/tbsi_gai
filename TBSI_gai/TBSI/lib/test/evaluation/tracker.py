@@ -91,6 +91,7 @@ class Tracker:
             debug_ = getattr(params, 'debug', 0)
 
         params.debug = debug_
+        os.environ["TBSI_CURRENT_SEQUENCE"] = seq.name
 
         # Get init information
         init_info = seq.init_info()
@@ -320,6 +321,5 @@ class Tracker:
             return decode_img(image_file[0], image_file[1])
         else:
             raise ValueError("type of image_file should be str or list")
-
 
 
