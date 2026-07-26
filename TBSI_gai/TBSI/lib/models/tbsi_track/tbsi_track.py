@@ -432,6 +432,7 @@ def build_tbsi_track(cfg, training=True):
         freq_consistency_local_kernel = getattr(cfg.MODEL, "FREQ_CONSISTENCY_LOCAL_KERNEL", 3)
         freq_consistency_margin = getattr(cfg.MODEL, "FREQ_CONSISTENCY_MARGIN", 0.0)
         freq_consistency_learnable_scale = getattr(cfg.MODEL, "FREQ_CONSISTENCY_LEARNABLE_SCALE", False)
+        freq_consistency_bands = getattr(cfg.MODEL, "FREQ_CONSISTENCY_BANDS", "low")
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -482,7 +483,8 @@ def build_tbsi_track(cfg, training=True):
                                             freq_consistency_mode=freq_consistency_mode,
                                             freq_consistency_local_kernel=freq_consistency_local_kernel,
                                             freq_consistency_margin=freq_consistency_margin,
-                                            freq_consistency_learnable_scale=freq_consistency_learnable_scale)
+                                            freq_consistency_learnable_scale=freq_consistency_learnable_scale,
+                                            freq_consistency_bands=freq_consistency_bands)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -532,7 +534,8 @@ def build_tbsi_track(cfg, training=True):
                   f'(layers={layer_msg}, scale={freq_consistency_scale}, '
                   f'cutoff={freq_consistency_cutoff}, mode={freq_consistency_mode}, '
                   f'kernel={freq_consistency_local_kernel}, margin={freq_consistency_margin}, '
-                  f'learnable_scale={freq_consistency_learnable_scale})')
+                  f'learnable_scale={freq_consistency_learnable_scale}, '
+                  f'bands={freq_consistency_bands})')
     else:
         raise NotImplementedError
 

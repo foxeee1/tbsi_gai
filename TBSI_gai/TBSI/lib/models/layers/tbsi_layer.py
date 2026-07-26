@@ -729,6 +729,36 @@ class SpatialFrequencyRatio(nn.Module):
         ratio = (low_energy / total_energy).clamp(0.0, 1.0)
         return ratio.view(bsz, num_tokens, 1).transpose(1, 2)
 
+    def band_ratios(self, x):
+        bsz, num_tokens, dim = x.shape
+        side = int(math.sqrt(num_tokens))
+        if side * side != num_tokens:
+            zeros = x.new_zeros(bsz, 1, num_tokens)
+            return zeros, zeros
+
+        feat = x.view(bsz, side, side, dim)
+        spec = torch.fft.fft2(feat.float(), dim=(1, 2), norm="ortho")
+        fy = torch.fft.fftfreq(side, device=x.device)
+        fx = torch.fft.fftfreq(side, device=x.device)
+        yy, xx = torch.meshgrid(fy, fx, indexing="ij")
+        radius = (yy.square() + xx.square()).sqrt()
+        low_mask = radius <= self.cutoff
+        mid_mask = (radius > self.cutoff) & (radius <= self.cutoff * 2.0)
+
+        def recon_energy(mask):
+            band = torch.fft.ifft2(
+                spec * mask.view(1, side, side, 1),
+                dim=(1, 2),
+                norm="ortho").real.to(dtype=x.dtype)
+            return band.square().mean(dim=-1, keepdim=True)
+
+        total_energy = feat.square().mean(dim=-1, keepdim=True).clamp_min(1e-6)
+        low_ratio = (recon_energy(low_mask) / total_energy).clamp(0.0, 1.0)
+        mid_ratio = (recon_energy(mid_mask) / total_energy).clamp(0.0, 1.0)
+        low_ratio = low_ratio.view(bsz, num_tokens, 1).transpose(1, 2)
+        mid_ratio = mid_ratio.view(bsz, num_tokens, 1).transpose(1, 2)
+        return low_ratio, mid_ratio
+
     @staticmethod
     def normalize(raw):
         centered = raw - raw.mean(dim=-1, keepdim=True)
@@ -766,7 +796,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
     above-average disagreements receive a negative pre-softmax bias.
     """
     def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3, margin=0.0,
-                 learnable_scale=False):
+                 learnable_scale=False, bands="low"):
         super().__init__(cutoff=cutoff)
         self.learnable_scale = learnable_scale
         if learnable_scale:
@@ -776,6 +806,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
         self.mode = mode
         self.local_kernel = local_kernel
         self.margin = margin
+        self.bands = bands
 
     @staticmethod
     def _stats(tensor):
@@ -820,6 +851,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
                 "cutoff": self.cutoff,
                 "local_kernel": self.local_kernel,
                 "margin": self.margin,
+                "bands": self.bands,
                 "rgb_low_ratio": self._stats(r_rgb),
                 "tir_low_ratio": self._stats(r_tir),
                 "frequency_disagreement": self._stats(diff),
@@ -833,9 +865,16 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
             pass
 
     def forward(self, x_rgb_search, x_tir_search):
-        r_rgb = self.low_freq_ratio(x_rgb_search)
-        r_tir = self.low_freq_ratio(x_tir_search)
-        diff = (r_rgb - r_tir).abs()
+        if self.bands == "low":
+            r_rgb = self.low_freq_ratio(x_rgb_search)
+            r_tir = self.low_freq_ratio(x_tir_search)
+            diff = (r_rgb - r_tir).abs()
+        elif self.bands == "low_mid":
+            r_rgb, m_rgb = self.band_ratios(x_rgb_search)
+            r_tir, m_tir = self.band_ratios(x_tir_search)
+            diff = 0.5 * ((r_rgb - r_tir).abs() + (m_rgb - m_tir).abs())
+        else:
+            raise ValueError(f"Unknown FREQ_CONSISTENCY_BANDS: {self.bands}")
         if self.mode == "local_anomaly":
             diff = self._local_anomaly(diff)
         elif self.mode != "global":
@@ -948,7 +987,8 @@ class TBSILayer(nn.Module):
                  freq_consistency_mode="global",
                  freq_consistency_local_kernel=3,
                  freq_consistency_margin=0.0,
-                 freq_consistency_learnable_scale=False):
+                 freq_consistency_learnable_scale=False,
+                 freq_consistency_bands="low"):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -1052,12 +1092,14 @@ class TBSILayer(nn.Module):
                 mode=freq_consistency_mode,
                 local_kernel=freq_consistency_local_kernel,
                 margin=freq_consistency_margin,
-                learnable_scale=freq_consistency_learnable_scale)
+                learnable_scale=freq_consistency_learnable_scale,
+                bands=freq_consistency_bands)
             rp = sum(p.numel() for p in self.freq_consistency.parameters())
             print(f"  [FCC] Cross-modal frequency-consistency bridge bias active "
                   f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, "
                   f"mode={freq_consistency_mode}, kernel={freq_consistency_local_kernel}, "
                   f"margin={freq_consistency_margin}, learnable_scale={freq_consistency_learnable_scale}, "
+                  f"bands={freq_consistency_bands}, "
                   f"{rp} params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
