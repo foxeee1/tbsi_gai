@@ -100,7 +100,7 @@ TRAIN:
   AMP: True
   PERSISTENT_WORKERS: True
   PREFETCH_FACTOR: 2         # 减少预取, 减小内存压力
-  SAVE_EPOCHS: [1, 2, 3, 5, 10, 15]  # 更多检查点便于恢复
+  SAVE_EPOCHS: [15]  # 更多检查点便于恢复
 TEST:
   EPOCH: 15
   SEARCH_FACTOR: 4.0
