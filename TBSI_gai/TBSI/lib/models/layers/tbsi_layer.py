@@ -765,11 +765,12 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
     disagreement at a search token is treated as conflict evidence. Only
     above-average disagreements receive a negative pre-softmax bias.
     """
-    def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3):
+    def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3, margin=0.0):
         super().__init__(cutoff=cutoff)
         self.scale = scale
         self.mode = mode
         self.local_kernel = local_kernel
+        self.margin = margin
 
     @staticmethod
     def _stats(tensor):
@@ -813,6 +814,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
                 "scale": self.scale,
                 "cutoff": self.cutoff,
                 "local_kernel": self.local_kernel,
+                "margin": self.margin,
                 "rgb_low_ratio": self._stats(r_rgb),
                 "tir_low_ratio": self._stats(r_tir),
                 "frequency_disagreement": self._stats(diff),
@@ -833,7 +835,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
             diff = self._local_anomaly(diff)
         elif self.mode != "global":
             raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
-        penalty = F.relu(self.normalize(diff))
+        penalty = F.relu(self.normalize(diff) - self.margin)
         bias = -self.scale * penalty
         self._maybe_dump_diag(r_rgb, r_tir, diff, penalty, bias)
         return bias, bias
@@ -938,7 +940,8 @@ class TBSILayer(nn.Module):
                  freq_consistency_scale=0.3,
                  freq_consistency_cutoff=0.25,
                  freq_consistency_mode="global",
-                 freq_consistency_local_kernel=3):
+                 freq_consistency_local_kernel=3,
+                 freq_consistency_margin=0.0):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -1040,10 +1043,12 @@ class TBSILayer(nn.Module):
                 scale=freq_consistency_scale,
                 cutoff=freq_consistency_cutoff,
                 mode=freq_consistency_mode,
-                local_kernel=freq_consistency_local_kernel)
+                local_kernel=freq_consistency_local_kernel,
+                margin=freq_consistency_margin)
             print(f"  [FCC] Cross-modal frequency-consistency bridge bias active "
                   f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, "
-                  f"mode={freq_consistency_mode}, kernel={freq_consistency_local_kernel}, 0 params)")
+                  f"mode={freq_consistency_mode}, kernel={freq_consistency_local_kernel}, "
+                  f"margin={freq_consistency_margin}, 0 params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=drop_path,
