@@ -419,6 +419,7 @@ def build_tbsi_track(cfg, training=True):
         use_competitive_bridge = getattr(cfg.MODEL, "COMPETITIVE_BRIDGE", False)
         competitive_bridge_layers = getattr(cfg.MODEL, "COMPETITIVE_BRIDGE_LAYERS", [])
         competitive_bridge_temperature = getattr(cfg.MODEL, "COMPETITIVE_BRIDGE_TEMPERATURE", 1.0)
+        competitive_bridge_residual_scale = getattr(cfg.MODEL, "COMPETITIVE_BRIDGE_RESIDUAL_SCALE", 1.0)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -456,7 +457,8 @@ def build_tbsi_track(cfg, training=True):
                                             cfs_reliability_bridge_hidden=cfs_reliability_bridge_hidden,
                                             use_competitive_bridge=use_competitive_bridge,
                                             competitive_bridge_layers=competitive_bridge_layers,
-                                            competitive_bridge_temperature=competitive_bridge_temperature)
+                                            competitive_bridge_temperature=competitive_bridge_temperature,
+                                            competitive_bridge_residual_scale=competitive_bridge_residual_scale)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -494,7 +496,8 @@ def build_tbsi_track(cfg, training=True):
         if use_competitive_bridge:
             layer_msg = "all" if not competitive_bridge_layers else list(competitive_bridge_layers)
             print(f'  [CompetitiveBridge] RGB/TIR s2t competition enabled '
-                  f'(layers={layer_msg}, temperature={competitive_bridge_temperature})')
+                  f'(layers={layer_msg}, temperature={competitive_bridge_temperature}, '
+                  f'residual_scale={competitive_bridge_residual_scale})')
     else:
         raise NotImplementedError
 

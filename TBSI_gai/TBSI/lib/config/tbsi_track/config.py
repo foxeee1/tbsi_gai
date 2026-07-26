@@ -84,6 +84,7 @@ cfg.MODEL.CFS_RELIABILITY_BRIDGE_HIDDEN = 32  # Hidden dimension for the lightwe
 cfg.MODEL.COMPETITIVE_BRIDGE = False  # Competitive RGB/TIR search-to-template bridge interaction
 cfg.MODEL.COMPETITIVE_BRIDGE_LAYERS = []  # TBSI layer indices; empty means all TBSI layers
 cfg.MODEL.COMPETITIVE_BRIDGE_TEMPERATURE = 1.0  # Temperature for modality competition over s2t logits
+cfg.MODEL.COMPETITIVE_BRIDGE_RESIDUAL_SCALE = 1.0  # 1.0 replaces TBSI s2t; <1.0 preserves the sequential bridge
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 

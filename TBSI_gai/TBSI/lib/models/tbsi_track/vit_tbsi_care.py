@@ -147,7 +147,8 @@ class VisionTransformerTBSI(BaseBackbone):
                  cfs_reliability_bridge_hidden=32,
                  use_competitive_bridge=False,
                  competitive_bridge_layers=None,
-                 competitive_bridge_temperature=1.0):
+                 competitive_bridge_temperature=1.0,
+                 competitive_bridge_residual_scale=1.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -267,7 +268,8 @@ class VisionTransformerTBSI(BaseBackbone):
                 cfs_reliability_bridge_scale=cfs_reliability_bridge_scale,
                 cfs_reliability_bridge_hidden=cfs_reliability_bridge_hidden,
                 use_competitive_bridge=use_comp_layer,
-                competitive_bridge_temperature=competitive_bridge_temperature))
+                competitive_bridge_temperature=competitive_bridge_temperature,
+                competitive_bridge_residual_scale=competitive_bridge_residual_scale))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()
