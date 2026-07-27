@@ -787,6 +787,63 @@ class FrequencyGateBias(SpatialFrequencyRatio):
         return self.scale * rgb_bias, self.scale * tir_bias
 
 
+class FreqRelEncoder(nn.Module):
+    """
+    Learnable frequency-relation estimator for FCC.
+
+    Spatial FFT power maps are encoded in the frequency domain and mapped back to
+    token-wise RGB/TIR reliability. The output is a search-key bias for s2t.
+    """
+    def __init__(self, dim=768, hidden_dim=64, side=16, sigma=0.18):
+        super().__init__()
+        fy = torch.fft.fftfreq(side)
+        fx = torch.fft.fftfreq(side)
+        yy, xx = torch.meshgrid(fy, fx, indexing="ij")
+        radius = (yy.square() + xx.square()).sqrt()
+        prior = torch.exp(-radius.square() / (2.0 * sigma * sigma)).clamp(1e-4, 1.0 - 1e-4)
+        self.register_buffer("freq_prior_logit", torch.logit(prior), persistent=False)
+        self.freq_residual = nn.Parameter(torch.zeros(side, side))
+        self.rel_mlp = nn.Sequential(
+            nn.Linear(4 * dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.rel_mlp[-1].weight)
+        nn.init.zeros_(self.rel_mlp[-1].bias)
+
+    def _mask(self, side, device, dtype):
+        logits = self.freq_prior_logit.to(device=device, dtype=dtype) + self.freq_residual.to(device=device, dtype=dtype)
+        if logits.shape[-1] != side:
+            logits = F.interpolate(
+                logits.view(1, 1, *logits.shape),
+                size=(side, side),
+                mode="bilinear",
+                align_corners=False,
+            ).view(side, side)
+        return torch.sigmoid(logits)
+
+    def _encode(self, x):
+        bsz, num_tokens, dim = x.shape
+        side = int(math.sqrt(num_tokens))
+        if side * side != num_tokens:
+            return x
+        feat = x.transpose(1, 2).reshape(bsz, dim, side, side)
+        spec = torch.fft.fft2(feat.float(), dim=(2, 3), norm="ortho")
+        mask = self._mask(side, x.device, spec.real.dtype).view(1, 1, side, side)
+        recon = torch.fft.ifft2(spec * mask, dim=(2, 3), norm="ortho").real.to(dtype=x.dtype)
+        total = feat.square().mean(dim=(2, 3), keepdim=True).clamp_min(1e-6)
+        encoded = recon.square() / total
+        return encoded.reshape(bsz, dim, num_tokens).transpose(1, 2)
+
+    def forward(self, x_rgb_search, x_tir_search):
+        e_rgb = self._encode(x_rgb_search)
+        e_tir = self._encode(x_tir_search)
+        rel = torch.cat([e_rgb, e_tir, (e_rgb - e_tir).abs(), e_rgb * e_tir], dim=-1)
+        reliability = torch.sigmoid(self.rel_mlp(rel)).transpose(1, 2)
+        return reliability
+
+
 class FrequencyConsistencyBias(SpatialFrequencyRatio):
     """
     Cross-modal frequency-consistency conflict suppression.
@@ -796,7 +853,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
     above-average disagreements receive a negative pre-softmax bias.
     """
     def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3, margin=0.0,
-                 learnable_scale=False, bands="low"):
+                 learnable_scale=False, bands="low", form="ratio", dim=768, hidden_dim=64):
         super().__init__(cutoff=cutoff)
         self.learnable_scale = learnable_scale
         if learnable_scale:
@@ -807,6 +864,11 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
         self.local_kernel = local_kernel
         self.margin = margin
         self.bands = bands
+        self.form = form
+        if form == "freqrel":
+            self.freqrel = FreqRelEncoder(dim=dim, hidden_dim=hidden_dim)
+        elif form != "ratio":
+            raise ValueError(f"Unknown FREQ_CONSISTENCY_FORM: {form}")
 
     @staticmethod
     def _stats(tensor):
@@ -852,6 +914,7 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
                 "local_kernel": self.local_kernel,
                 "margin": self.margin,
                 "bands": self.bands,
+                "form": self.form,
                 "rgb_low_ratio": self._stats(r_rgb),
                 "tir_low_ratio": self._stats(r_tir),
                 "frequency_disagreement": self._stats(diff),
@@ -865,6 +928,14 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
             pass
 
     def forward(self, x_rgb_search, x_tir_search):
+        if self.form == "freqrel":
+            reliability = self.freqrel(x_rgb_search, x_tir_search)
+            penalty = 1.0 - reliability
+            scale = self.scale.clamp_min(0.0) if torch.is_tensor(self.scale) else self.scale
+            bias = -scale * penalty
+            self._maybe_dump_diag(reliability, reliability, penalty, penalty, bias)
+            return bias, bias
+
         if self.bands == "low":
             r_rgb = self.low_freq_ratio(x_rgb_search)
             r_tir = self.low_freq_ratio(x_tir_search)
@@ -988,7 +1059,8 @@ class TBSILayer(nn.Module):
                  freq_consistency_local_kernel=3,
                  freq_consistency_margin=0.0,
                  freq_consistency_learnable_scale=False,
-                 freq_consistency_bands="low"):
+                 freq_consistency_bands="low",
+                 freq_consistency_form="ratio"):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -1093,13 +1165,15 @@ class TBSILayer(nn.Module):
                 local_kernel=freq_consistency_local_kernel,
                 margin=freq_consistency_margin,
                 learnable_scale=freq_consistency_learnable_scale,
-                bands=freq_consistency_bands)
+                bands=freq_consistency_bands,
+                form=freq_consistency_form,
+                dim=dim)
             rp = sum(p.numel() for p in self.freq_consistency.parameters())
             print(f"  [FCC] Cross-modal frequency-consistency bridge bias active "
                   f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, "
                   f"mode={freq_consistency_mode}, kernel={freq_consistency_local_kernel}, "
                   f"margin={freq_consistency_margin}, learnable_scale={freq_consistency_learnable_scale}, "
-                  f"bands={freq_consistency_bands}, "
+                  f"bands={freq_consistency_bands}, form={freq_consistency_form}, "
                   f"{rp} params)")
 
         self.ca_s2t_v2f = CASTBlock(dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio,

@@ -98,6 +98,7 @@ cfg.MODEL.FREQ_CONSISTENCY_LOCAL_KERNEL = 3  # Neighborhood size for local anoma
 cfg.MODEL.FREQ_CONSISTENCY_MARGIN = 0.0  # Suppress only disagreements above mean + margin * std
 cfg.MODEL.FREQ_CONSISTENCY_LEARNABLE_SCALE = False  # Learn one FCC bias scale per enabled TBSI layer
 cfg.MODEL.FREQ_CONSISTENCY_BANDS = "low"  # low | low_mid
+cfg.MODEL.FREQ_CONSISTENCY_FORM = "ratio"  # ratio | freqrel
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
 
