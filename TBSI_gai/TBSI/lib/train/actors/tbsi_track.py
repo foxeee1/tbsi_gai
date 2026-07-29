@@ -70,7 +70,11 @@ class TBSITrackActor(BaseActor):
         else:
             location_loss = torch.tensor(0.0, device=l1_loss.device)
 
+        fcc_aux_loss = self.compute_fcc_aux_loss(pred_dict, gt_bbox, l1_loss.device)
         loss = self.loss_weight['giou'] * giou_loss + self.loss_weight['l1'] * l1_loss + self.loss_weight['focal'] * location_loss
+        fcc_aux_weight = getattr(self.cfg.TRAIN, "FCC_AUX_WEIGHT", 0.0)
+        if fcc_aux_weight > 0:
+            loss = loss + fcc_aux_weight * fcc_aux_loss
 
         if return_status:
             mean_iou = iou.detach().mean()
@@ -78,7 +82,32 @@ class TBSITrackActor(BaseActor):
                       "Loss/giou": giou_loss.item(),
                       "Loss/l1": l1_loss.item(),
                       "Loss/location": location_loss.item(),
+                      "Loss/fcc_aux": fcc_aux_loss.item(),
                       "IoU": mean_iou.item()}
             return loss, status
         else:
             return loss
+
+    def compute_fcc_aux_loss(self, pred_dict, gt_bbox, device):
+        penalty = pred_dict.get("fcc_aux_penalty", None)
+        if penalty is None:
+            return torch.tensor(0.0, device=device)
+        if penalty.dim() != 3:
+            return torch.tensor(0.0, device=device)
+        if penalty.shape[1] != 1 and penalty.shape[-1] == 1:
+            penalty = penalty.transpose(1, 2)
+        bsz, _, num_tokens = penalty.shape
+        side = int(num_tokens ** 0.5)
+        if side * side != num_tokens:
+            return torch.tensor(0.0, device=penalty.device)
+
+        gt_xyxy = box_xywh_to_xyxy(gt_bbox).clamp(min=0.0, max=1.0).to(device=penalty.device)
+        coord = (torch.arange(side, device=penalty.device, dtype=penalty.dtype) + 0.5) / side
+        yy, xx = torch.meshgrid(coord, coord, indexing="ij")
+        centers_x = xx.reshape(1, num_tokens)
+        centers_y = yy.reshape(1, num_tokens)
+        x1, y1, x2, y2 = [gt_xyxy[:, i:i + 1].to(dtype=penalty.dtype) for i in range(4)]
+        target_mask = ((centers_x >= x1) & (centers_x <= x2) &
+                       (centers_y >= y1) & (centers_y <= y2)).to(dtype=penalty.dtype).unsqueeze(1)
+        denom = target_mask.sum().clamp_min(1.0)
+        return (penalty * target_mask).sum() / denom

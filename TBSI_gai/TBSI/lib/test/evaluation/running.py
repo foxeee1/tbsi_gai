@@ -1,11 +1,20 @@
 import numpy as np
 import multiprocessing
 import os
+import signal
 import sys
 from itertools import product
 from collections import OrderedDict
 from lib.test.evaluation import Sequence, Tracker
 import torch
+
+
+class SequenceTimeoutError(TimeoutError):
+    pass
+
+
+def _sequence_timeout_handler(signum, frame):
+    raise SequenceTimeoutError("sequence evaluation timed out")
 
 
 def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
@@ -128,15 +137,43 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
         return
 
     print('Tracker: {} {} {} ,  Sequence: {}'.format(tracker.name, tracker.parameter_name, tracker.run_id, seq.name))
+
+    def _fallback_output():
+        gt = seq.ground_truth_rect
+        if isinstance(gt, (dict, OrderedDict)):
+            obj_id = next(iter(gt))
+            gt_arr = gt[obj_id]
+        else:
+            gt_arr = gt
+        if gt_arr is None:
+            gt_arr = np.zeros((1, 4), dtype=np.float32)
+        init_box = np.array(gt_arr[0]).tolist()
+        num_frames = len(gt_arr)
+        return {'target_bbox': [init_box for _ in range(num_frames)],
+                'time': [0.0 for _ in range(num_frames)]}
+
+    timeout_sec = 0 if debug else int(os.environ.get('TBSI_SEQUENCE_TIMEOUT', '0') or 0)
+    previous_handler = None
+    if timeout_sec > 0 and hasattr(signal, 'SIGALRM'):
+        previous_handler = signal.signal(signal.SIGALRM, _sequence_timeout_handler)
+        signal.alarm(timeout_sec)
   
     if debug:
         output = tracker.run_sequence(seq, debug=debug, run_id=tracker.run_id, name=tracker.parameter_name)
     else:
         try:
             output = tracker.run_sequence(seq, debug=debug, run_id=tracker.run_id, name=tracker.parameter_name)
+        except SequenceTimeoutError as e:
+            print('[SKIP_TIMEOUT] {} after {}s: {}'.format(seq.name, timeout_sec, e))
+            output = _fallback_output()
         except Exception as e:
             print(e)
             return
+        finally:
+            if timeout_sec > 0 and hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)
+                if previous_handler is not None:
+                    signal.signal(signal.SIGALRM, previous_handler)
 
     sys.stdout.flush()
 

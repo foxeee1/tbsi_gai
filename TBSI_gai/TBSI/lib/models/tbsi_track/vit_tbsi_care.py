@@ -162,7 +162,13 @@ class VisionTransformerTBSI(BaseBackbone):
                  freq_consistency_margin=0.0,
                  freq_consistency_learnable_scale=False,
                  freq_consistency_bands="low",
-                 freq_consistency_form="ratio"):
+                 freq_consistency_form="ratio",
+                 freq_consistency_layer_forms=None,
+                 freq_consistency_keep_ratio=0.5,
+                 freq_consistency_conflict_act=False,
+                 freq_consistency_conflict_top_ratio=0.1,
+                 freq_consistency_conflict_tau=0.02,
+                 freq_consistency_conflict_gamma=40.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -244,6 +250,13 @@ class VisionTransformerTBSI(BaseBackbone):
         freq_gate_layers = set(freq_gate_layers)
         freq_consistency_layers = freq_consistency_layers or []
         freq_consistency_layers = set(freq_consistency_layers)
+        freq_consistency_layer_forms = freq_consistency_layer_forms or []
+        enabled_fcc_layers = sorted(freq_consistency_layers)
+        fcc_form_by_layer = {
+            layer_id: freq_consistency_layer_forms[idx]
+            for idx, layer_id in enumerate(enabled_fcc_layers)
+            if idx < len(freq_consistency_layer_forms)
+        }
         if self.tbsi_loc is not None and type(self.tbsi_loc) == list:
             for i in range(len(self.tbsi_loc)):
                 use_sd_layer = use_signal_decouple and (
@@ -264,6 +277,7 @@ class VisionTransformerTBSI(BaseBackbone):
                     len(freq_gate_layers) == 0 or i in freq_gate_layers)
                 use_fcc_layer = use_freq_consistency and (
                     len(freq_consistency_layers) == 0 or i in freq_consistency_layers)
+                layer_fcc_form = fcc_form_by_layer.get(i, freq_consistency_form)
                 layer_scale = (signal_decouple_layer_scales[i]
                                if i < len(signal_decouple_layer_scales)
                                else signal_decouple_scale)
@@ -305,7 +319,12 @@ class VisionTransformerTBSI(BaseBackbone):
                 freq_consistency_margin=freq_consistency_margin,
                 freq_consistency_learnable_scale=freq_consistency_learnable_scale,
                 freq_consistency_bands=freq_consistency_bands,
-                freq_consistency_form=freq_consistency_form))
+                freq_consistency_form=layer_fcc_form,
+                freq_consistency_keep_ratio=freq_consistency_keep_ratio,
+                freq_consistency_conflict_act=freq_consistency_conflict_act,
+                freq_consistency_conflict_top_ratio=freq_consistency_conflict_top_ratio,
+                freq_consistency_conflict_tau=freq_consistency_conflict_tau,
+                freq_consistency_conflict_gamma=freq_consistency_conflict_gamma))
 
         self.init_weights(weight_init)
         self._reset_bridge_module_init()
@@ -359,6 +378,7 @@ class VisionTransformerTBSI(BaseBackbone):
         
         tbsi_index = 0
         quality_signals = []
+        fcc_aux_penalties = []
         for i, blk in enumerate(self.blocks):
             x_v = blk(x_v)
             x_i = blk(x_i)
@@ -366,6 +386,11 @@ class VisionTransformerTBSI(BaseBackbone):
                 out = self.tbsi_layers[tbsi_index](x_v, x_i, lens_z, temporal_tokens=temporal_tokens)
                 if len(out) == 3:
                     x_v, x_i, q = out
+                    if isinstance(q, dict):
+                        fcc_penalty = q.get("fcc_aux_penalty", None)
+                        if fcc_penalty is not None:
+                            fcc_aux_penalties.append(fcc_penalty)
+                        q = q.get("quality_signal", None)
                     if q is not None:
                         quality_signals.append(q)
                 else:
@@ -379,6 +404,8 @@ class VisionTransformerTBSI(BaseBackbone):
         aux_dict = {"attn": None}
         if quality_signals:
             aux_dict["quality_signal"] = torch.stack(quality_signals, dim=1).mean(dim=1)
+        if fcc_aux_penalties:
+            aux_dict["fcc_aux_penalty"] = torch.stack(fcc_aux_penalties, dim=1).mean(dim=1)
         return self.norm(x), aux_dict
 
     def init_weights(self, mode=''):

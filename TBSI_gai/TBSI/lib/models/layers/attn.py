@@ -151,7 +151,7 @@ class Attention_st(nn.Module):
                                                                           relative_position_index.max() + 1)))
             trunc_normal_(self.relative_position_bias_table, std=0.02)
 
-    def forward(self, x, mask=None, return_attention=False, quality_mask=None, attn_bias=None):
+    def forward(self, x, mask=None, return_attention=False, quality_mask=None, attn_bias=None, value_gate=None):
         """quality_mask: (B, N_search, 1) — per-search-token confidence in [0,1].
         [Phase 1 Fix] Applied as PRE-softmax logit bias (instead of post-softmax multiply).
         Principle: attention gates should operate in logit space, not probability space.
@@ -204,6 +204,13 @@ class Attention_st(nn.Module):
         attn = attn.softmax(dim=-1)
 
         attn = self.attn_drop(attn)
+
+        if value_gate is not None:
+            gate = value_gate
+            if gate.dim() == 3 and gate.shape[1] == 1:
+                gate = gate.transpose(1, 2)
+            if gate.shape[1] == v.shape[1]:
+                v = v * gate.to(dtype=v.dtype)
 
         x = attn @ v  # B, lens_z/x, C
         x = x.transpose(1, 2)  # B, C, lens_z/x

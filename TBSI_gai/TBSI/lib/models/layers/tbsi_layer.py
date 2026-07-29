@@ -853,7 +853,9 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
     above-average disagreements receive a negative pre-softmax bias.
     """
     def __init__(self, scale=0.3, cutoff=0.25, mode="global", local_kernel=3, margin=0.0,
-                 learnable_scale=False, bands="low", form="ratio", dim=768, hidden_dim=64):
+                 learnable_scale=False, bands="low", form="ratio", keep_ratio=0.5,
+                 dim=768, hidden_dim=64, conflict_act=False, conflict_top_ratio=0.1,
+                 conflict_tau=0.02, conflict_gamma=40.0):
         super().__init__(cutoff=cutoff)
         self.learnable_scale = learnable_scale
         if learnable_scale:
@@ -865,8 +867,32 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
         self.margin = margin
         self.bands = bands
         self.form = form
+        self.keep_ratio = float(keep_ratio)
+        self.conflict_act = bool(conflict_act)
+        self.conflict_top_ratio = float(conflict_top_ratio)
+        self.conflict_tau = float(conflict_tau)
+        self.conflict_gamma = float(conflict_gamma)
+        self.threshold_temperature = 10.0
         if form == "freqrel":
             self.freqrel = FreqRelEncoder(dim=dim, hidden_dim=hidden_dim)
+        elif form == "directional":
+            self.directional_router = nn.Sequential(
+                nn.Linear(4, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, 2),
+            )
+            nn.init.zeros_(self.directional_router[-1].weight)
+            nn.init.zeros_(self.directional_router[-1].bias)
+        elif form == "threshold":
+            self.threshold = nn.Parameter(torch.tensor(float(margin)))
+        elif form == "value_gate":
+            self.threshold = nn.Parameter(torch.tensor(float(margin)))
+        elif form == "auxloss":
+            self.threshold = nn.Parameter(torch.tensor(float(margin)))
+        elif form == "selection":
+            self.threshold_temperature = 10.0
+        elif form == "semantic_boost":
+            self.threshold = nn.Parameter(torch.tensor(float(margin)))
         elif form != "ratio":
             raise ValueError(f"Unknown FREQ_CONSISTENCY_FORM: {form}")
 
@@ -913,8 +939,15 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
                 "cutoff": self.cutoff,
                 "local_kernel": self.local_kernel,
                 "margin": self.margin,
+                "keep_ratio": self.keep_ratio,
+                "threshold": float(self.threshold.detach().item()) if hasattr(self, "threshold") else None,
+                "temperature": self.threshold_temperature,
                 "bands": self.bands,
                 "form": self.form,
+                "conflict_act": self.conflict_act,
+                "conflict_top_ratio": self.conflict_top_ratio,
+                "conflict_tau": self.conflict_tau,
+                "conflict_gamma": self.conflict_gamma,
                 "rgb_low_ratio": self._stats(r_rgb),
                 "tir_low_ratio": self._stats(r_tir),
                 "frequency_disagreement": self._stats(diff),
@@ -927,6 +960,15 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
         except Exception:
             pass
 
+    def _frame_conflict_activation(self, diff):
+        diff_flat = diff.squeeze(1)
+        top_ratio = min(max(self.conflict_top_ratio, 0.0), 1.0)
+        top_k = max(1, int(round(diff_flat.shape[-1] * top_ratio)))
+        top_mean = torch.topk(diff_flat, k=top_k, dim=-1).values.mean(dim=-1, keepdim=True)
+        base_mean = diff_flat.mean(dim=-1, keepdim=True)
+        conflict = (top_mean - base_mean).unsqueeze(1)
+        return torch.sigmoid(self.conflict_gamma * (conflict - self.conflict_tau))
+
     def forward(self, x_rgb_search, x_tir_search):
         if self.form == "freqrel":
             reliability = self.freqrel(x_rgb_search, x_tir_search)
@@ -934,6 +976,143 @@ class FrequencyConsistencyBias(SpatialFrequencyRatio):
             scale = self.scale.clamp_min(0.0) if torch.is_tensor(self.scale) else self.scale
             bias = -scale * penalty
             self._maybe_dump_diag(reliability, reliability, penalty, penalty, bias)
+            return bias, bias
+
+        if self.form == "directional":
+            if self.bands != "low":
+                raise ValueError("Directional FCC currently supports FREQ_CONSISTENCY_BANDS='low' only")
+            r_rgb = self.low_freq_ratio(x_rgb_search)
+            r_tir = self.low_freq_ratio(x_tir_search)
+            signed = r_rgb - r_tir
+            diff = signed.abs()
+            router_in = torch.cat([r_rgb, r_tir, signed, diff], dim=1).transpose(1, 2)
+            weights = torch.softmax(self.directional_router(router_in), dim=-1).transpose(1, 2)
+            w_rgb = weights[:, 0:1, :]
+            w_tir = weights[:, 1:2, :]
+            scale = self.scale.clamp_min(0.0) if torch.is_tensor(self.scale) else self.scale
+            bias_rgb = scale * (w_rgb - 0.5)
+            bias_tir = scale * (w_tir - 0.5)
+            preference = (weights.max(dim=1, keepdim=True).values - 0.5) * 2.0
+            self._maybe_dump_diag(r_rgb, r_tir, diff, preference, 0.5 * (bias_rgb.abs() + bias_tir.abs()))
+            return bias_rgb, bias_tir
+
+        if self.form == "threshold":
+            if self.bands == "low":
+                r_rgb = self.low_freq_ratio(x_rgb_search)
+                r_tir = self.low_freq_ratio(x_tir_search)
+                diff = (r_rgb - r_tir).abs()
+            elif self.bands == "low_mid":
+                r_rgb, m_rgb = self.band_ratios(x_rgb_search)
+                r_tir, m_tir = self.band_ratios(x_tir_search)
+                diff = 0.5 * ((r_rgb - r_tir).abs() + (m_rgb - m_tir).abs())
+            else:
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_BANDS: {self.bands}")
+            if self.mode == "local_anomaly":
+                diff = self._local_anomaly(diff)
+            elif self.mode != "global":
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
+            threshold = self.threshold.clamp_min(0.0)
+            penalty = torch.sigmoid(self.threshold_temperature * (diff - threshold))
+            if self.conflict_act:
+                penalty = penalty * self._frame_conflict_activation(diff)
+            scale = self.scale.clamp_min(0.0) if torch.is_tensor(self.scale) else self.scale
+            bias = -scale * penalty
+            self._maybe_dump_diag(r_rgb, r_tir, diff, penalty, bias)
+            return bias, bias
+
+        if self.form == "value_gate":
+            if self.bands == "low":
+                r_rgb = self.low_freq_ratio(x_rgb_search)
+                r_tir = self.low_freq_ratio(x_tir_search)
+                diff = (r_rgb - r_tir).abs()
+            elif self.bands == "low_mid":
+                r_rgb, m_rgb = self.band_ratios(x_rgb_search)
+                r_tir, m_tir = self.band_ratios(x_tir_search)
+                diff = 0.5 * ((r_rgb - r_tir).abs() + (m_rgb - m_tir).abs())
+            else:
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_BANDS: {self.bands}")
+            if self.mode == "local_anomaly":
+                diff = self._local_anomaly(diff)
+            elif self.mode != "global":
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
+            threshold = self.threshold.clamp_min(0.0)
+            penalty = torch.sigmoid(self.threshold_temperature * (diff - threshold))
+            if self.conflict_act:
+                penalty = penalty * self._frame_conflict_activation(diff)
+            scale = self.scale.clamp(0.0, 1.0) if torch.is_tensor(self.scale) else min(max(self.scale, 0.0), 1.0)
+            gate = (1.0 - scale * penalty).clamp(0.0, 1.0)
+            self._maybe_dump_diag(r_rgb, r_tir, diff, penalty, gate)
+            return gate, gate
+
+        if self.form == "auxloss":
+            if self.bands == "low":
+                r_rgb = self.low_freq_ratio(x_rgb_search)
+                r_tir = self.low_freq_ratio(x_tir_search)
+                diff = (r_rgb - r_tir).abs()
+            elif self.bands == "low_mid":
+                r_rgb, m_rgb = self.band_ratios(x_rgb_search)
+                r_tir, m_tir = self.band_ratios(x_tir_search)
+                diff = 0.5 * ((r_rgb - r_tir).abs() + (m_rgb - m_tir).abs())
+            else:
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_BANDS: {self.bands}")
+            if self.mode == "local_anomaly":
+                diff = self._local_anomaly(diff)
+            elif self.mode != "global":
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
+            threshold = self.threshold.clamp_min(0.0)
+            penalty = torch.sigmoid(self.threshold_temperature * (diff - threshold))
+            if self.conflict_act:
+                penalty = penalty * self._frame_conflict_activation(diff)
+            self._maybe_dump_diag(r_rgb, r_tir, diff, penalty, penalty)
+            return penalty, penalty
+
+        if self.form == "semantic_boost":
+            if self.bands == "low":
+                r_rgb = self.low_freq_ratio(x_rgb_search)
+                r_tir = self.low_freq_ratio(x_tir_search)
+                diff = (r_rgb - r_tir).abs()
+            elif self.bands == "low_mid":
+                r_rgb, m_rgb = self.band_ratios(x_rgb_search)
+                r_tir, m_tir = self.band_ratios(x_tir_search)
+                diff = 0.5 * ((r_rgb - r_tir).abs() + (m_rgb - m_tir).abs())
+            else:
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_BANDS: {self.bands}")
+            if self.mode == "local_anomaly":
+                diff = self._local_anomaly(diff)
+            elif self.mode != "global":
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
+            threshold = self.threshold.clamp_min(0.0)
+            consistency = 1.0 - torch.sigmoid(self.threshold_temperature * (diff - threshold))
+            scale = self.scale.clamp_min(0.0) if torch.is_tensor(self.scale) else self.scale
+            bias = scale * consistency
+            self._maybe_dump_diag(r_rgb, r_tir, diff, consistency, bias)
+            return bias, bias
+
+        if self.form == "selection":
+            if self.bands == "low":
+                r_rgb = self.low_freq_ratio(x_rgb_search)
+                r_tir = self.low_freq_ratio(x_tir_search)
+                diff = (r_rgb - r_tir).abs()
+            elif self.bands == "low_mid":
+                r_rgb, m_rgb = self.band_ratios(x_rgb_search)
+                r_tir, m_tir = self.band_ratios(x_tir_search)
+                diff = 0.5 * ((r_rgb - r_tir).abs() + (m_rgb - m_tir).abs())
+            else:
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_BANDS: {self.bands}")
+            if self.mode == "local_anomaly":
+                diff = self._local_anomaly(diff)
+            elif self.mode != "global":
+                raise ValueError(f"Unknown FREQ_CONSISTENCY_MODE: {self.mode}")
+            diff_flat = diff.squeeze(1)
+            keep_ratio = min(max(float(self.keep_ratio), 0.0), 1.0)
+            keep_k = max(1, int(round(diff_flat.shape[-1] * keep_ratio)))
+            keep_idx = torch.topk(-diff_flat, k=keep_k, dim=-1).indices
+            hard_mask = torch.zeros_like(diff_flat, dtype=x_rgb_search.dtype)
+            hard_mask.scatter_(dim=-1, index=keep_idx, value=1.0)
+            penalty = 1.0 - hard_mask.unsqueeze(1)
+            scale = self.scale.clamp_min(0.0) if torch.is_tensor(self.scale) else self.scale
+            bias = -1e4 * penalty * scale
+            self._maybe_dump_diag(r_rgb, r_tir, diff, penalty, bias)
             return bias, bias
 
         if self.bands == "low":
@@ -1060,7 +1239,12 @@ class TBSILayer(nn.Module):
                  freq_consistency_margin=0.0,
                  freq_consistency_learnable_scale=False,
                  freq_consistency_bands="low",
-                 freq_consistency_form="ratio"):
+                 freq_consistency_form="ratio",
+                 freq_consistency_keep_ratio=0.5,
+                 freq_consistency_conflict_act=False,
+                 freq_consistency_conflict_top_ratio=0.1,
+                 freq_consistency_conflict_tau=0.02,
+                 freq_consistency_conflict_gamma=40.0):
         super().__init__()
         self.use_dgs = use_dgs
         self.dgs_mode = dgs_mode
@@ -1167,7 +1351,13 @@ class TBSILayer(nn.Module):
                 learnable_scale=freq_consistency_learnable_scale,
                 bands=freq_consistency_bands,
                 form=freq_consistency_form,
-                dim=dim)
+                keep_ratio=freq_consistency_keep_ratio,
+                conflict_act=freq_consistency_conflict_act,
+                conflict_top_ratio=freq_consistency_conflict_top_ratio,
+                conflict_tau=freq_consistency_conflict_tau,
+                conflict_gamma=freq_consistency_conflict_gamma,
+                dim=dim,
+            )
             rp = sum(p.numel() for p in self.freq_consistency.parameters())
             print(f"  [FCC] Cross-modal frequency-consistency bridge bias active "
                   f"(scale={freq_consistency_scale}, cutoff={freq_consistency_cutoff}, "
@@ -1275,6 +1465,8 @@ class TBSILayer(nn.Module):
             qm_v, qm_i = tsc_gate_v, tsc_gate_i
 
         tcb_bias_v = tcb_bias_i = None
+        fcc_value_gate_v = fcc_value_gate_i = None
+        fcc_aux_penalty = None
         if self.use_template_conditioned_bridge:
             tcb_bias_i = self.template_conditioned_bridge(x_i_orig, fused_t)
             tcb_bias_v = self.template_conditioned_bridge(x_v_orig, fused_t)
@@ -1287,23 +1479,33 @@ class TBSILayer(nn.Module):
             tcb_bias_i = freq_bias_i if tcb_bias_i is None else tcb_bias_i + freq_bias_i
             tcb_bias_v = freq_bias_v if tcb_bias_v is None else tcb_bias_v + freq_bias_v
         if self.use_freq_consistency:
-            fcc_bias_v, fcc_bias_i = self.freq_consistency(x_v_orig, x_i_orig)
-            tcb_bias_i = fcc_bias_i if tcb_bias_i is None else tcb_bias_i + fcc_bias_i
-            tcb_bias_v = fcc_bias_v if tcb_bias_v is None else tcb_bias_v + fcc_bias_v
+            if self.freq_consistency.form == "value_gate":
+                fcc_value_gate_v, fcc_value_gate_i = self.freq_consistency(x_v_orig, x_i_orig)
+            elif self.freq_consistency.form == "auxloss":
+                fcc_aux_v, fcc_aux_i = self.freq_consistency(x_v_orig, x_i_orig)
+                fcc_aux_penalty = 0.5 * (fcc_aux_v + fcc_aux_i)
+            else:
+                fcc_bias_v, fcc_bias_i = self.freq_consistency(x_v_orig, x_i_orig)
+                tcb_bias_i = fcc_bias_i if tcb_bias_i is None else tcb_bias_i + fcc_bias_i
+                tcb_bias_v = fcc_bias_v if tcb_bias_v is None else tcb_bias_v + fcc_bias_v
 
         # 4 CASTBlocks (quality-guided cross-attention, using decoupled signal)
         if self.use_competitive_bridge:
             fused_t_base = fused_t_attn
             comp_i, comp_v = self.competitive_bridge(fused_t_base, x_v_orig, x_i_orig)
             fused_i = self.ca_s2t_i2f(torch.cat([fused_t_base, x_i_orig], dim=1),
-                                      quality_mask=qm_i, attn_bias=tcb_bias_i)[:, :lens_z, :]
+                                      quality_mask=qm_i, attn_bias=tcb_bias_i,
+                                      value_gate=fcc_value_gate_i)[:, :lens_z, :]
             fused_v = self.ca_s2t_v2f(torch.cat([fused_t_base, x_v_orig], dim=1),
-                                      quality_mask=qm_v, attn_bias=tcb_bias_v)[:, :lens_z, :]
+                                      quality_mask=qm_v, attn_bias=tcb_bias_v,
+                                      value_gate=fcc_value_gate_v)[:, :lens_z, :]
             fused_t_comp = comp_i * fused_i + comp_v * fused_v
             fused_t_seq = self.ca_s2t_i2f(torch.cat([fused_t_base, x_i_orig], dim=1),
-                                          quality_mask=qm_i, attn_bias=tcb_bias_i)[:, :lens_z, :]
+                                          quality_mask=qm_i, attn_bias=tcb_bias_i,
+                                          value_gate=fcc_value_gate_i)[:, :lens_z, :]
             fused_t_seq = self.ca_s2t_v2f(torch.cat([fused_t_seq, x_v_orig], dim=1),
-                                          quality_mask=qm_v, attn_bias=tcb_bias_v)[:, :lens_z, :]
+                                          quality_mask=qm_v, attn_bias=tcb_bias_v,
+                                          value_gate=fcc_value_gate_v)[:, :lens_z, :]
             fused_t_attn = fused_t_seq + self.competitive_bridge_residual_scale * (
                 fused_t_comp - fused_t_seq)
             search_quality_signal = torch.cat([comp_v.mean(dim=1), comp_i.mean(dim=1)], dim=-1)
@@ -1313,11 +1515,13 @@ class TBSILayer(nn.Module):
                                        quality_mask=qm_i)[:, lens_z:, :]
         else:
             fused_t_attn = self.ca_s2t_i2f(torch.cat([fused_t_attn, x_i_orig], dim=1),
-                                           quality_mask=qm_i, attn_bias=tcb_bias_i)[:, :lens_z, :]
+                                           quality_mask=qm_i, attn_bias=tcb_bias_i,
+                                           value_gate=fcc_value_gate_i)[:, :lens_z, :]
             temp_x_v = self.ca_t2s_f2v(torch.cat([fused_t_attn, x_v_orig], dim=1),
                                        quality_mask=qm_v)[:, lens_z:, :]
             fused_t_attn = self.ca_s2t_v2f(torch.cat([fused_t_attn, x_v_orig], dim=1),
-                                           quality_mask=qm_v, attn_bias=tcb_bias_v)[:, :lens_z, :]
+                                           quality_mask=qm_v, attn_bias=tcb_bias_v,
+                                           value_gate=fcc_value_gate_v)[:, :lens_z, :]
             temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t_attn, x_i_orig], dim=1),
                                        quality_mask=qm_i)[:, lens_z:, :]
 
@@ -1361,6 +1565,8 @@ class TBSILayer(nn.Module):
             x_v = torch.cat([x_v[:, :lens_z, :], temp_x_v], dim=1)
             x_i = torch.cat([x_i[:, :lens_z, :], temp_x_i], dim=1)
             q_global = output_gate_signal if output_gate_signal is not None else search_quality_signal
+        if fcc_aux_penalty is not None:
+            q_global = {"fcc_aux_penalty": fcc_aux_penalty, "quality_signal": q_global}
 
         # ===== Restore interference for template self-attention (not cross-modal) =====
         if self.use_signal_decouple and fused_t_interference is not None:

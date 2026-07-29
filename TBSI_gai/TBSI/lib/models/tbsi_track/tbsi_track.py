@@ -434,6 +434,12 @@ def build_tbsi_track(cfg, training=True):
         freq_consistency_learnable_scale = getattr(cfg.MODEL, "FREQ_CONSISTENCY_LEARNABLE_SCALE", False)
         freq_consistency_bands = getattr(cfg.MODEL, "FREQ_CONSISTENCY_BANDS", "low")
         freq_consistency_form = getattr(cfg.MODEL, "FREQ_CONSISTENCY_FORM", "ratio")
+        freq_consistency_layer_forms = getattr(cfg.MODEL, "FREQ_CONSISTENCY_LAYER_FORMS", [])
+        freq_consistency_keep_ratio = getattr(cfg.MODEL, "FREQ_CONSISTENCY_KEEP_RATIO", 0.5)
+        freq_consistency_conflict_act = getattr(cfg.MODEL, "FREQ_CONSISTENCY_CONFLICT_ACT", False)
+        freq_consistency_conflict_top_ratio = getattr(cfg.MODEL, "FREQ_CONSISTENCY_CONFLICT_TOP_RATIO", 0.1)
+        freq_consistency_conflict_tau = getattr(cfg.MODEL, "FREQ_CONSISTENCY_CONFLICT_TAU", 0.02)
+        freq_consistency_conflict_gamma = getattr(cfg.MODEL, "FREQ_CONSISTENCY_CONFLICT_GAMMA", 40.0)
         backbone = vit_base_patch16_224_tbsi(pretrained, drop_path_rate=cfg.TRAIN.DROP_PATH_RATE,
                                             tbsi_loc=cfg.MODEL.BACKBONE.TBSI_LOC,
                                             tbsi_drop_path=cfg.TRAIN.TBSI_DROP_PATH,
@@ -486,7 +492,13 @@ def build_tbsi_track(cfg, training=True):
                                             freq_consistency_margin=freq_consistency_margin,
                                             freq_consistency_learnable_scale=freq_consistency_learnable_scale,
                                             freq_consistency_bands=freq_consistency_bands,
-                                            freq_consistency_form=freq_consistency_form)
+                                            freq_consistency_form=freq_consistency_form,
+                                            freq_consistency_layer_forms=freq_consistency_layer_forms,
+                                            freq_consistency_keep_ratio=freq_consistency_keep_ratio,
+                                            freq_consistency_conflict_act=freq_consistency_conflict_act,
+                                            freq_consistency_conflict_top_ratio=freq_consistency_conflict_top_ratio,
+                                            freq_consistency_conflict_tau=freq_consistency_conflict_tau,
+                                            freq_consistency_conflict_gamma=freq_consistency_conflict_gamma)
 
         if use_signal_decouple:
             layer_msg = "all" if not signal_decouple_layers else list(signal_decouple_layers)
@@ -537,7 +549,9 @@ def build_tbsi_track(cfg, training=True):
                   f'cutoff={freq_consistency_cutoff}, mode={freq_consistency_mode}, '
                   f'kernel={freq_consistency_local_kernel}, margin={freq_consistency_margin}, '
                   f'learnable_scale={freq_consistency_learnable_scale}, '
-                  f'bands={freq_consistency_bands}, form={freq_consistency_form})')
+                  f'bands={freq_consistency_bands}, form={freq_consistency_form}, '
+                  f'layer_forms={list(freq_consistency_layer_forms)}, '
+                  f'conflict_act={freq_consistency_conflict_act})')
     else:
         raise NotImplementedError
 
