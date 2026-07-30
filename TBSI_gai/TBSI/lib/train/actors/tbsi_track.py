@@ -1,6 +1,7 @@
 from . import BaseActor
-from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
+from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy, generalized_box_iou
 import torch
+import torch.nn.functional as F
 from ...utils.heapmap_utils import generate_heatmap
 
 
@@ -52,6 +53,37 @@ class TBSITrackActor(BaseActor):
         gt_gaussian_maps = generate_heatmap(gt_dict['search_anno'], self.cfg.DATA.SEARCH.SIZE, self.cfg.MODEL.BACKBONE.STRIDE)
         gt_gaussian_maps = gt_gaussian_maps[-1].unsqueeze(1)
 
+        loss_terms = self.compute_tracking_terms(pred_dict, gt_bbox, gt_gaussian_maps)
+        giou_loss = loss_terms['giou_loss']
+        iou = loss_terms['iou']
+        l1_loss = loss_terms['l1_loss']
+        location_loss = loss_terms['location_loss']
+
+        fcc_aux_loss = self.compute_fcc_aux_loss(pred_dict, gt_bbox, l1_loss.device)
+        loss = self.loss_weight['giou'] * giou_loss + self.loss_weight['l1'] * l1_loss + self.loss_weight['focal'] * location_loss
+        fcc_aux_weight = getattr(self.cfg.TRAIN, "FCC_AUX_WEIGHT", 0.0)
+        if fcc_aux_weight > 0:
+            loss = loss + fcc_aux_weight * fcc_aux_loss
+
+        utility_loss = self.compute_utility_loss(pred_dict, gt_bbox, gt_gaussian_maps, l1_loss.device)
+        utility_weight = getattr(self.cfg.TRAIN, "UTILITY_WEIGHT", 0.0)
+        if utility_weight > 0:
+            loss = loss + utility_weight * utility_loss
+
+        if return_status:
+            mean_iou = iou.detach().mean()
+            status = {"Loss/total": loss.item(),
+                      "Loss/giou": giou_loss.item(),
+                      "Loss/l1": l1_loss.item(),
+                      "Loss/location": location_loss.item(),
+                      "Loss/utility": utility_loss.item(),
+                      "Loss/fcc_aux": fcc_aux_loss.item(),
+                      "IoU": mean_iou.item()}
+            return loss, status
+        else:
+            return loss
+
+    def compute_tracking_terms(self, pred_dict, gt_bbox, gt_gaussian_maps):
         pred_boxes = pred_dict['pred_boxes']
         if torch.isnan(pred_boxes).any():
             raise ValueError("Network outputs is NAN! Stop Training")
@@ -61,32 +93,84 @@ class TBSITrackActor(BaseActor):
 
         try:
             giou_loss, iou = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)
-        except:
-            giou_loss, iou = torch.tensor(0.0).cuda(), torch.tensor(0.0).cuda()
+        except Exception:
+            giou_loss = torch.tensor(0.0, device=pred_boxes.device)
+            iou = torch.tensor(0.0, device=pred_boxes.device)
         l1_loss = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)
 
         if 'score_map' in pred_dict:
             location_loss = self.objective['focal'](pred_dict['score_map'], gt_gaussian_maps)
         else:
             location_loss = torch.tensor(0.0, device=l1_loss.device)
+        return {
+            'giou_loss': giou_loss,
+            'iou': iou,
+            'l1_loss': l1_loss,
+            'location_loss': location_loss,
+        }
 
-        fcc_aux_loss = self.compute_fcc_aux_loss(pred_dict, gt_bbox, l1_loss.device)
-        loss = self.loss_weight['giou'] * giou_loss + self.loss_weight['l1'] * l1_loss + self.loss_weight['focal'] * location_loss
-        fcc_aux_weight = getattr(self.cfg.TRAIN, "FCC_AUX_WEIGHT", 0.0)
-        if fcc_aux_weight > 0:
-            loss = loss + fcc_aux_weight * fcc_aux_loss
+    def compute_tracking_terms_per_sample(self, pred_dict, gt_bbox, gt_gaussian_maps):
+        pred_boxes = pred_dict['pred_boxes']
+        bsz, num_queries, _ = pred_boxes.shape
+        pred_boxes_xyxy = box_cxcywh_to_xyxy(pred_boxes)
+        gt_boxes_xyxy = box_xywh_to_xyxy(gt_bbox)[:, None, :].repeat((1, num_queries, 1)).clamp(min=0.0, max=1.0)
 
-        if return_status:
-            mean_iou = iou.detach().mean()
-            status = {"Loss/total": loss.item(),
-                      "Loss/giou": giou_loss.item(),
-                      "Loss/l1": l1_loss.item(),
-                      "Loss/location": location_loss.item(),
-                      "Loss/fcc_aux": fcc_aux_loss.item(),
-                      "IoU": mean_iou.item()}
-            return loss, status
+        giou, _ = generalized_box_iou(pred_boxes_xyxy.reshape(-1, 4), gt_boxes_xyxy.reshape(-1, 4))
+        giou_loss = (1.0 - giou).view(bsz, num_queries).mean(dim=1)
+        l1_loss = F.l1_loss(pred_boxes_xyxy, gt_boxes_xyxy, reduction='none').mean(dim=(1, 2))
+
+        if 'score_map' in pred_dict:
+            location_loss = self.compute_focal_loss_per_sample(pred_dict['score_map'], gt_gaussian_maps)
         else:
-            return loss
+            location_loss = torch.zeros(bsz, device=pred_boxes.device)
+        return {
+            'giou_loss': giou_loss,
+            'l1_loss': l1_loss,
+            'location_loss': location_loss,
+        }
+
+    def compute_focal_loss_per_sample(self, prediction, target):
+        positive_index = target.eq(1).float()
+        negative_index = target.lt(1).float()
+        negative_weights = torch.pow(1 - target, self.objective['focal'].beta)
+        prediction = torch.clamp(prediction, 1e-12, 1 - 1e-6)
+
+        positive_loss = torch.log(prediction) * torch.pow(1 - prediction, self.objective['focal'].alpha) * positive_index
+        negative_loss = torch.log(1 - prediction) * torch.pow(prediction, self.objective['focal'].alpha) * negative_weights * negative_index
+
+        reduce_dims = tuple(range(1, prediction.dim()))
+        num_positive = positive_index.sum(dim=reduce_dims)
+        positive_loss = positive_loss.sum(dim=reduce_dims)
+        negative_loss = negative_loss.sum(dim=reduce_dims)
+
+        loss = torch.where(
+            num_positive > 0,
+            -(positive_loss + negative_loss) / num_positive.clamp_min(1.0),
+            -negative_loss,
+        )
+        return loss
+
+    def compute_utility_loss(self, pred_dict, gt_bbox, gt_gaussian_maps, device):
+        utility_logits = pred_dict.get('utility_logits', None)
+        utility_candidates = pred_dict.get('utility_candidates', None)
+        if utility_logits is None or utility_candidates is None:
+            return torch.tensor(0.0, device=device)
+
+        per_action_losses = []
+        action_order = ['keep', 'rgb', 'tir']
+        for action_name in action_order:
+            cand_terms = self.compute_tracking_terms_per_sample(utility_candidates[action_name], gt_bbox, gt_gaussian_maps)
+            per_action_losses.append(
+                self.loss_weight['giou'] * cand_terms['giou_loss']
+                + self.loss_weight['l1'] * cand_terms['l1_loss']
+                + self.loss_weight['focal'] * cand_terms['location_loss']
+            )
+
+        action_losses = torch.stack(per_action_losses, dim=1)
+        tau = getattr(self.cfg.MODEL, "CUTR_LITE_TAU", 0.5)
+        pi_star = torch.softmax(-action_losses / max(tau, 1e-6), dim=1).detach()
+        log_pi = F.log_softmax(utility_logits, dim=1)
+        return F.kl_div(log_pi, pi_star, reduction='batchmean')
 
     def compute_fcc_aux_loss(self, pred_dict, gt_bbox, device):
         penalty = pred_dict.get("fcc_aux_penalty", None)

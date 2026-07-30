@@ -10,7 +10,7 @@ parser = argparse.ArgumentParser(description='Run tracker on sequence or dataset
 parser.add_argument('--tracker_name', default='tbsi_track')
 parser.add_argument('--tracker_param', type=str, help='Name of config file.')
 parser.add_argument('--dataset_name', type=str, help='Name of config file.')
-parser.add_argument('--runid', type=int, default=None, help='The run id.')
+parser.add_argument('--runid', type=str, default=None, help='The run id.')
 # parser.add_argument('--run_ids', type=str, help='Name of config file.')
 # parser.add_argument('--run_ids', nargs='+', help='<Required> Set flag', required=True)
 args = parser.parse_args()

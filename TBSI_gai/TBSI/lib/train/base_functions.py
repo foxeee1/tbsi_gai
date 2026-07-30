@@ -223,12 +223,15 @@ def get_optimizer_scheduler(net, cfg):
             elif router_lr:
                 param_dicts = [
                     {
-                        "params": [p for n, p in net.named_parameters() if "dgs_router" in n and p.requires_grad],
+                        "params": [p for n, p in net.named_parameters()
+                                   if ("dgs_router" in n or "utility_router" in n) and p.requires_grad],
                         "lr": router_lr,
                     },
-                    {"params": [p for n, p in net.named_parameters() if "tbsi" in n and "dgs_router" not in n and p.requires_grad]},
+                    {"params": [p for n, p in net.named_parameters()
+                                if "tbsi" in n and "dgs_router" not in n and "utility_router" not in n and p.requires_grad]},
                     {
-                        "params": [p for n, p in net.named_parameters() if "tbsi" not in n and "dgs_router" not in n and p.requires_grad],
+                        "params": [p for n, p in net.named_parameters()
+                                   if "tbsi" not in n and "dgs_router" not in n and "utility_router" not in n and p.requires_grad],
                         "lr": cfg.TRAIN.LR * cfg.TRAIN.BACKBONE_MULTIPLIER,
                     },
                 ]

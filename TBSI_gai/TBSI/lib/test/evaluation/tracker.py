@@ -20,7 +20,7 @@ def trackerlist(name: str, parameter_name: str, dataset_name: str, run_ids = Non
         run_ids: A single or list of run_ids.
         display_name: Name to be displayed in the result plots.
     """
-    if run_ids is None or isinstance(run_ids, int):
+    if run_ids is None or isinstance(run_ids, (int, str)):
         run_ids = [run_ids]
     return [Tracker(name, parameter_name, dataset_name, run_id, display_name, result_only) for run_id in run_ids]
 
@@ -81,10 +81,17 @@ class Tracker:
         # Use parameter file's checkpoint path (already correct), only override
         # when run_id is explicitly provided as an epoch number
         if run_id is not None:
-            run_id = int(run_id)
-            from lib.test.evaluation.environment import env_settings
-            params.checkpoint = os.path.join(env_settings().save_dir, "%s/checkpoints/train/tbsi_track/%s/TBSITrack_ep%04d.pth.tar" %
-                                         (name, name, run_id))
+            try:
+                run_id = int(run_id)
+            except (TypeError, ValueError):
+                run_id = None
+            if run_id is not None:
+                from lib.test.evaluation.environment import env_settings
+                params.checkpoint = os.path.join(
+                    env_settings().save_dir,
+                    "%s/checkpoints/train/tbsi_track/%s/TBSITrack_ep%04d.pth.tar" %
+                    (name, name, run_id)
+                )
 
         debug_ = debug
         if debug is None:
@@ -321,5 +328,3 @@ class Tracker:
             return decode_img(image_file[0], image_file[1])
         else:
             raise ValueError("type of image_file should be str or list")
-
-

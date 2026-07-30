@@ -181,13 +181,37 @@ class TemporalChannelCalibration(nn.Module):
         return fused_feat * channel_weight.unsqueeze(-1).unsqueeze(-1)
 
 
+class UtilityRouter(nn.Module):
+    """Tiny 3-action router for keep/RGB/TIR rectification."""
+
+    def __init__(self, dim=768, hidden_dim=128):
+        super().__init__()
+        stats_dim = dim * 3 + 7
+        self.norm = nn.LayerNorm(stats_dim)
+        self.fc1 = nn.Linear(stats_dim, hidden_dim)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(hidden_dim, 3)
+
+        nn.init.zeros_(self.fc2.weight)
+        nn.init.zeros_(self.fc2.bias)
+        with torch.no_grad():
+            self.fc2.bias[0] = 2.0
+
+    def forward(self, rgb_roi, tir_roi, base_roi, diff_stats, score_stats):
+        x = torch.cat([rgb_roi, tir_roi, base_roi, diff_stats, score_stats], dim=1)
+        x = self.norm(x)
+        x = self.fc2(self.act(self.fc1(x)))
+        return x
+
+
 class TBSITrack(nn.Module):
     """ TBSI with Temporal Token + Quality-Aware Fusion (spatial+channel+MADC+CSR) """
 
     def __init__(self, transformer, box_head, aux_loss=False, head_type="CORNER",
                  use_temporal_tokens=False, num_temporal_tokens=4,
                  use_degradation_aware=False, da_mode='spatial',
-                 use_madc=False, use_csr=False, da_v2=False):
+                 use_madc=False, use_csr=False, da_v2=False,
+                 use_cutr_lite=False, cutr_hidden_dim=128, cutr_eta=0.10):
         super().__init__()
         hidden_dim = transformer.embed_dim
         self.backbone = transformer
@@ -202,6 +226,8 @@ class TBSITrack(nn.Module):
 
         if self.aux_loss:
             self.box_head = _get_clones(self.box_head, 6)
+        self.use_cutr_lite = use_cutr_lite
+        self.cutr_eta = cutr_eta
 
         # Temporal Token Module (pre-fusion)
         self.use_temporal_tokens = use_temporal_tokens
@@ -226,6 +252,9 @@ class TBSITrack(nn.Module):
             self.da_fusion_mode = 'residual'  # 'residual' | 'gate'
             self.da_fusion_scale = 0.5        # residual scale
 
+        if use_cutr_lite:
+            self.utility_router = UtilityRouter(dim=hidden_dim, hidden_dim=cutr_hidden_dim)
+
         # Print summary
         parts = []
         if use_temporal_tokens: parts.append(f'TemporalTokens(K={num_temporal_tokens})')
@@ -234,6 +263,8 @@ class TBSITrack(nn.Module):
             if use_madc: da_str += '+MADC'
             if use_csr: da_str += '+CSR'
             parts.append(da_str)
+        if use_cutr_lite:
+            parts.append(f'CUTR-Lite(eta={cutr_eta}, hidden={cutr_hidden_dim})')
         if parts: print(f'TBSITrack with: {", ".join(parts)}')
 
     def reset_temporal_tokens(self):
@@ -300,9 +331,8 @@ class TBSITrack(nn.Module):
         out['backbone_feat'] = x
         return out
 
-    def forward_fusion_only(self, cat_feature, quality_hint=None):
-        """Extract search RGB/TIR + DA fusion. Returns (B, C, H, W) fused features.
-        quality_hint: (B, 2) from TBSILayer average per-modality confidence, or None."""
+    def get_fusion_pack(self, cat_feature, quality_hint=None):
+        """Return the modality feature pack used by the prediction head."""
         B = cat_feature.shape[0]
         C = cat_feature.shape[-1]
         num_search_token = 256
@@ -315,21 +345,110 @@ class TBSITrack(nn.Module):
         HW_ = int(HW_ / 2)
         opt_feat = opt.view(-1, C_, self.feat_sz_s, self.feat_sz_s)
 
-        if self.use_degradation_aware:
-            feat_rgb = enc_rgb.transpose(1, 2).reshape(B, C, self.feat_sz_s, self.feat_sz_s)
-            feat_tir = enc_tir.transpose(1, 2).reshape(B, C, self.feat_sz_s, self.feat_sz_s)
-            base_fused = self.tbsi_fuse_search(opt_feat)
+        feat_rgb = enc_rgb.transpose(1, 2).reshape(B, C, self.feat_sz_s, self.feat_sz_s)
+        feat_tir = enc_tir.transpose(1, 2).reshape(B, C, self.feat_sz_s, self.feat_sz_s)
+        base_fused = self.tbsi_fuse_search(opt_feat)
 
+        if self.use_degradation_aware:
             if getattr(self, 'da_fusion_mode', 'residual') == 'gate':
                 gate = self.da_fusion.forward_gate_only(feat_rgb, feat_tir)
-                return base_fused * (1.0 + gate)
+                fused_feat = base_fused * (1.0 + gate)
             else:
                 # Pass TBSILayer quality_hint to DaFusion for attention-fusion joint gating
                 da_fused = self.da_fusion(feat_rgb, feat_tir, quality_hint=quality_hint)
                 scale = getattr(self, 'da_fusion_scale', 0.5)
-                return base_fused + scale * da_fused
+                fused_feat = base_fused + scale * da_fused
         else:
-            return self.tbsi_fuse_search(opt_feat)
+            fused_feat = base_fused
+
+        return {
+            'enc_rgb': enc_rgb,
+            'enc_tir': enc_tir,
+            'feat_rgb': feat_rgb,
+            'feat_tir': feat_tir,
+            'base_fused': base_fused,
+            'fused_feat': fused_feat,
+        }
+
+    def _layer_norm_2d(self, feat):
+        feat_ln = F.layer_norm(feat.permute(0, 2, 3, 1), (feat.shape[1],))
+        return feat_ln.permute(0, 3, 1, 2)
+
+    def _global_pool(self, feat):
+        return feat.mean(dim=(2, 3))
+
+    def _score_stats(self, score_map):
+        flat = score_map.flatten(1)
+        peak = flat.max(dim=1).values
+        mean = flat.mean(dim=1)
+        topk = torch.topk(flat, k=min(2, flat.shape[1]), dim=1).values
+        gap = topk[:, 0] - topk[:, -1]
+        prob = flat / flat.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        entropy = -(prob * prob.clamp_min(1e-6).log()).sum(dim=1)
+        return torch.stack([peak, mean, gap, entropy], dim=1)
+
+    def _build_cutr_router_inputs(self, fusion_pack):
+        rgb_roi = self._global_pool(fusion_pack['feat_rgb'])
+        tir_roi = self._global_pool(fusion_pack['feat_tir'])
+        base_roi = self._global_pool(fusion_pack['base_fused'])
+        diff_roi = rgb_roi - tir_roi
+        diff_stats = torch.stack([
+            diff_roi.abs().mean(dim=1),
+            diff_roi.pow(2).mean(dim=1).sqrt(),
+            diff_roi.mean(dim=1),
+        ], dim=1)
+        return rgb_roi, tir_roi, base_roi, diff_stats
+
+    def _apply_cutr_lite(self, fusion_pack, gt_score_map=None):
+        base_head = self.forward_head_from_fused(fusion_pack['base_fused'], gt_score_map=gt_score_map)
+        rgb_roi, tir_roi, base_roi, diff_stats = self._build_cutr_router_inputs(fusion_pack)
+        score_stats = self._score_stats(base_head['score_map'])
+        utility_logits = self.utility_router(rgb_roi, tir_roi, base_roi, diff_stats, score_stats)
+        utility_probs = torch.softmax(utility_logits, dim=1)
+
+        diff_feat = self._layer_norm_2d(fusion_pack['feat_rgb']) - self._layer_norm_2d(fusion_pack['feat_tir'])
+        a_diff = self.cutr_eta * (utility_probs[:, 1] - utility_probs[:, 2]).view(-1, 1, 1, 1)
+        rectified_feat = fusion_pack['base_fused'] + a_diff * diff_feat
+
+        pred_dict = self.forward_head_from_fused(rectified_feat, gt_score_map=gt_score_map)
+        pred_dict['utility_logits'] = utility_logits
+        pred_dict['utility_probs'] = utility_probs
+        pred_dict['router_score_stats'] = score_stats
+        pred_dict['router_diff_stats'] = diff_stats
+
+        if self.training:
+            with torch.no_grad():
+                pred_dict['utility_candidates'] = {
+                    'keep': base_head,
+                    'rgb': self.forward_head_from_fused(
+                        fusion_pack['base_fused'] + self.cutr_eta * diff_feat,
+                        gt_score_map=gt_score_map,
+                    ),
+                    'tir': self.forward_head_from_fused(
+                        fusion_pack['base_fused'] - self.cutr_eta * diff_feat,
+                        gt_score_map=gt_score_map,
+                    ),
+                }
+        return pred_dict
+
+    def forward_fusion_only(self, cat_feature, quality_hint=None):
+        """Extract search RGB/TIR + DA fusion. Returns (B, C, H, W) fused features."""
+        return self.get_fusion_pack(cat_feature, quality_hint=quality_hint)['fused_feat']
+
+    def forward_head_from_fused(self, fused_feat, gt_score_map=None):
+        """Run the prediction head from a prepared fused feature map."""
+        B = fused_feat.shape[0]
+        if self.head_type == "CENTER":
+            score_map_ctr, bbox, size_map, offset_map = self.box_head(fused_feat, gt_score_map)
+            outputs_coord = bbox
+            outputs_coord_new = outputs_coord.view(B, -1, 4)
+            return {
+                'pred_boxes': outputs_coord_new,
+                'score_map': score_map_ctr,
+                'size_map': size_map,
+                'offset_map': offset_map,
+            }
+        raise NotImplementedError
 
     def forward_head(self, cat_feature, gt_score_map=None, temporal_tokens=None, quality_hint=None):
         B, L, C = cat_feature.shape
@@ -349,25 +468,16 @@ class TBSITrack(nn.Module):
             ], dim=1)
 
         # Fusion (with quality hint from TBSILayer for path-level gating)
-        fused_feat = self.forward_fusion_only(cat_feature, quality_hint=quality_hint)
+        fusion_pack = self.get_fusion_pack(cat_feature, quality_hint=quality_hint)
+        fused_feat = fusion_pack['fused_feat']
+
+        if self.use_cutr_lite:
+            return self._apply_cutr_lite(fusion_pack, gt_score_map=gt_score_map)
 
         # TC3: Temporal-Conditioned Channel Calibration
         if self.use_temporal_tokens and temporal_tokens is not None:
             fused_feat = self.tc3(fused_feat, temporal_tokens)
-
-        # Head
-        opt_feat = fused_feat
-        if self.head_type == "CENTER":
-            score_map_ctr, bbox, size_map, offset_map = self.box_head(opt_feat, gt_score_map)
-            outputs_coord = bbox
-            outputs_coord_new = outputs_coord.view(B, -1, 4)
-            out = {'pred_boxes': outputs_coord_new,
-                   'score_map': score_map_ctr,
-                   'size_map': size_map,
-                   'offset_map': offset_map}
-            return out
-        else:
-            raise NotImplementedError
+        return self.forward_head_from_fused(fused_feat, gt_score_map=gt_score_map)
 
 
 def build_tbsi_track(cfg, training=True):
@@ -567,6 +677,9 @@ def build_tbsi_track(cfg, training=True):
     use_madc = getattr(cfg.MODEL, "DA_MADC", False)
     use_csr = getattr(cfg.MODEL, "DA_CSR", False)
     num_temporal = getattr(cfg.MODEL, "NUM_TEMPORAL_TOKENS", 4)
+    use_cutr_lite = getattr(cfg.MODEL, "CUTR_LITE", False)
+    cutr_hidden_dim = getattr(cfg.MODEL, "CUTR_LITE_HIDDEN", 128)
+    cutr_eta = getattr(cfg.MODEL, "CUTR_LITE_ETA", 0.10)
 
     if use_da:
         da_str = 'DaFusionV2' if da_v2 else 'DaFusionV1'
@@ -585,10 +698,15 @@ def build_tbsi_track(cfg, training=True):
         use_madc=use_madc,
         use_csr=use_csr,
         da_v2=da_v2,
+        use_cutr_lite=use_cutr_lite,
+        cutr_hidden_dim=cutr_hidden_dim,
+        cutr_eta=cutr_eta,
     )
 
     # Stage 2: load baseline checkpoint + freeze all except post_fusion_block
     stage2_baseline = getattr(cfg.MODEL, "STAGE2_BASELINE", "")
+    cutr_baseline = getattr(cfg.MODEL, "CUTR_LITE_BASELINE", "")
+    router_only = getattr(cfg.TRAIN, "ROUTER_ONLY", False)
     if stage2_baseline and training:
         baseline_path = os.path.join(current_dir, '../../../', stage2_baseline)
         if os.path.exists(baseline_path):
@@ -610,6 +728,24 @@ def build_tbsi_track(cfg, training=True):
         total_count = sum(p.numel() for p in model.parameters())
         print(f'Stage 2: Frozen {total_count - trainable_count:,}/{total_count:,} params. '
               f'Trainable: {trainable_count:,} ({100*trainable_count/total_count:.2f}%)')
+    elif use_cutr_lite and cutr_baseline and training:
+        baseline_path = os.path.join(current_dir, '../../../', cutr_baseline)
+        if os.path.exists(baseline_path):
+            checkpoint = torch.load(baseline_path, map_location="cpu")
+            missing, unexpected = model.load_state_dict(checkpoint["net"], strict=False)
+            print(f'CUTR-Lite: Loaded baseline from {cutr_baseline}')
+            print(f'  Missing keys (expected): {[k for k in missing if "utility_router" in k]}')
+            print(f'  Unexpected keys: {len(unexpected)}')
+        else:
+            print(f'WARNING: CUTR-Lite baseline not found: {baseline_path}')
+
+        if router_only:
+            for n, p in model.named_parameters():
+                p.requires_grad = ("utility_router" in n)
+            trainable_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            total_count = sum(p.numel() for p in model.parameters())
+            print(f'CUTR-Lite router-only: Frozen {total_count - trainable_count:,}/{total_count:,} params. '
+                  f'Trainable: {trainable_count:,} ({100*trainable_count/total_count:.4f}%)')
     elif 'TBSITrack' in cfg.MODEL.PRETRAIN_FILE and training:
         pretrained_file = os.path.join(pretrained_path, cfg.MODEL.PRETRAIN_FILE)
         checkpoint = torch.load(pretrained_file, map_location="cpu")

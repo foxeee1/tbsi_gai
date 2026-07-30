@@ -32,6 +32,10 @@ def parameters(yaml_name: str):
     else:
         params.checkpoint = old_ckpt
 
+    checkpoint_override = os.environ.get("TBSI_CHECKPOINT_OVERRIDE", "").strip()
+    if checkpoint_override:
+        params.checkpoint = checkpoint_override
+
     # whether to save boxes from all queries
     params.save_all_boxes = False
 

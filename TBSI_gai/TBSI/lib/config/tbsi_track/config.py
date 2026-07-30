@@ -107,6 +107,11 @@ cfg.MODEL.FREQ_CONSISTENCY_CONFLICT_TAU = 0.02  # Activation threshold on frame-
 cfg.MODEL.FREQ_CONSISTENCY_CONFLICT_GAMMA = 40.0  # Sharpness of frame-level conflict activation
 cfg.MODEL.DGSFUSION = False   # DGSFusion: Divergence-Gated Specialized Fusion (内嵌TBSILayer)
 cfg.MODEL.DGS_MODE = "v1"     # DGSFusion router mode: "v1"(6→1硬编码α) | "v2"(6→2自由α) | "v3"(attention熵) | "v4"(差异投影) | "v5"(自质量+差异投影) | "v6"(差异+模板对齐)
+cfg.MODEL.CUTR_LITE = False
+cfg.MODEL.CUTR_LITE_HIDDEN = 128
+cfg.MODEL.CUTR_LITE_ETA = 0.10
+cfg.MODEL.CUTR_LITE_TAU = 0.50
+cfg.MODEL.CUTR_LITE_BASELINE = ""
 
 # MODEL.HEAD
 cfg.MODEL.HEAD = edict()
@@ -142,6 +147,8 @@ cfg.TRAIN.TBSI_DROP_PATH = []  # drop_path rate for TBSI Attention_st
 cfg.TRAIN.SOT_PRETRAIN = False  # SOT pretraining with shared backbones
 cfg.TRAIN.TEMPORAL_LR = None  # Independent LR for temporal token params (if set, overrides default grouping)
 cfg.TRAIN.ROUTER_LR = None    # Independent LR for dgs_router params
+cfg.TRAIN.UTILITY_WEIGHT = 1.0
+cfg.TRAIN.ROUTER_ONLY = False
 
 cfg.TRAIN.BN_MOMENTUM = None  # BN momentum override (None = use default 0.1)
 cfg.TRAIN.GRAD_ACCUM_STEPS = 1  # gradient accumulation steps
