@@ -7,7 +7,9 @@ TBSI_gai/TBSI/output/experiments/*
 !TBSI_gai/TBSI/output/experiments/**/
 TBSI_gai/TBSI/output/experiments/**/test_results/*.txt
 TBSI_gai/TBSI/output/experiments/**/test_results/*_time.txt
+TBSI_gai/TBSI/output/experiments/**/*.txt
 TBSI_gai/TBSI/output/experiments/**/*.log
+TBSI_gai/TBSI/output/experiments/**/*.json
 TBSI_gai/TBSI/output/experiments/**/*.jsonl
 TBSI_gai/TBSI/output/experiments/**/*.pth.tar
 TBSI_gai/TBSI/artifacts/
