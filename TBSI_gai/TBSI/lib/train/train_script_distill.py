@@ -108,4 +108,4 @@ def run(settings):
     trainer = LTRTrainer(actor, [loader_train, loader_val], optimizer, settings, lr_scheduler, use_amp=use_amp)
 
     # train process
-    trainer.train(cfg.TRAIN.EPOCH, load_latest=True, fail_safe=True, distill=True)
+    trainer.train(cfg.TRAIN.EPOCH, load_latest=True, fail_safe=False, distill=True)

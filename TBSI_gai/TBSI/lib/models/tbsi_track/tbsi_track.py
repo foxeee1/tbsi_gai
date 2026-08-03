@@ -18,6 +18,61 @@ from lib.models.layers.dafusion_v2 import DaFusionV2
 from lib.utils.box_ops import box_xyxy_to_cxcywh
 
 
+def _stage2_trainable_keywords(cfg):
+    """Return parameter-name fragments that should stay trainable in Stage-2."""
+    model_cfg = cfg.MODEL
+    flag_to_keys = {
+        "TEMPORAL_TOKENS": ["temporal_token", "tc3"],
+        "DEGRADATION_AWARE": ["da_fusion"],
+        "DGSFUSION": ["dgs"],
+        "SIGNAL_DECOUPLE": ["signal_decoupler"],
+        "SOFT_SEARCH_RELIABILITY": ["soft_search_reliability"],
+        "TEMPLATE_SEARCH_COMPETITION": ["template_search_competition"],
+        "OUTPUT_RESIDUAL_GATE": ["output_residual_gate"],
+        "TEMPLATE_CONDITIONED_BRIDGE": ["template_conditioned_bridge"],
+        "CFS_RELIABILITY_BRIDGE": ["cfs_reliability_bridge"],
+        "COMPETITIVE_BRIDGE": ["competitive_bridge"],
+        "FREQ_GATE": ["freq_gate"],
+        "FREQ_CONSISTENCY": ["freq_consistency"],
+        "CUTR_LITE": ["utility_router"],
+        "RTM": ["rtm"],
+        "EGIR": ["egir"],
+        "RSM": ["rs_mamba"],
+    }
+    keys = []
+    for flag, fragments in flag_to_keys.items():
+        if bool(getattr(model_cfg, flag, False)):
+            keys.extend(fragments)
+    if not keys:
+        keys = ["post_fusion_block", "da_fusion", "box_head", "temporal_token", "tc3"]
+    return sorted(set(keys))
+
+
+def _active_stage2_module_keywords(cfg):
+    keys = []
+    for flag, fragments in {
+        "TEMPORAL_TOKENS": ["temporal_token", "tc3"],
+        "DEGRADATION_AWARE": ["da_fusion"],
+        "DGSFUSION": ["dgs"],
+        "SIGNAL_DECOUPLE": ["signal_decoupler"],
+        "SOFT_SEARCH_RELIABILITY": ["soft_search_reliability"],
+        "TEMPLATE_SEARCH_COMPETITION": ["template_search_competition"],
+        "OUTPUT_RESIDUAL_GATE": ["output_residual_gate"],
+        "TEMPLATE_CONDITIONED_BRIDGE": ["template_conditioned_bridge"],
+        "CFS_RELIABILITY_BRIDGE": ["cfs_reliability_bridge"],
+        "COMPETITIVE_BRIDGE": ["competitive_bridge"],
+        "FREQ_GATE": ["freq_gate"],
+        "FREQ_CONSISTENCY": ["freq_consistency"],
+        "CUTR_LITE": ["utility_router"],
+        "RTM": ["rtm"],
+        "EGIR": ["egir"],
+        "RSM": ["rs_mamba"],
+    }.items():
+        if bool(getattr(cfg.MODEL, flag, False)):
+            keys.extend(fragments)
+    return sorted(set(keys))
+
+
 class DegradationAwareFusion(nn.Module):
     """
     Quality-Aware Fusion Module.
@@ -142,6 +197,54 @@ class DegradationAwareFusion(nn.Module):
         return gate  # base_fused will multiply by (1 + gate)
 
 
+class EvidenceGuidedInteractionRouter(nn.Module):
+    """Group-wise quality routing with an exact baseline-preserving start."""
+
+    def __init__(self, dim, groups=16, hidden=32, scale=0.10):
+        super().__init__()
+        if dim % groups != 0:
+            raise ValueError(f"EGIR groups={groups} must divide dim={dim}")
+        self.groups = int(groups)
+        self.group_dim = dim // groups
+        self.scale = float(scale)
+        evidence_dim = groups * 3
+        self.evidence = nn.Sequential(
+            nn.Conv2d(evidence_dim, hidden, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(max(1, min(8, hidden)), hidden),
+            nn.GELU(),
+            nn.Conv2d(hidden, groups * 2, kernel_size=1, bias=True),
+        )
+        nn.init.zeros_(self.evidence[-1].weight)
+        nn.init.zeros_(self.evidence[-1].bias)
+        with torch.no_grad():
+            self.evidence[-1].bias[:groups].fill_(4.0)
+            self.evidence[-1].bias[groups:].fill_(-4.0)
+
+    def _group_mean(self, feat):
+        b, c, h, w = feat.shape
+        return feat.reshape(b, self.groups, self.group_dim, h, w).mean(dim=2)
+
+    def forward(self, feat_rgb, feat_tir, base_fused):
+        rgb_g = self._group_mean(feat_rgb)
+        tir_g = self._group_mean(feat_tir)
+        base_g = self._group_mean(base_fused)
+        agreement = F.cosine_similarity(feat_rgb, feat_tir, dim=1, eps=1e-6)
+        evidence = torch.cat([
+            agreement.unsqueeze(1).expand(-1, self.groups, -1, -1),
+            (rgb_g - base_g).abs(),
+            (tir_g - base_g).abs(),
+        ], dim=1)
+        logits = self.evidence(evidence).reshape(
+            feat_rgb.shape[0], 2, self.groups, feat_rgb.shape[2], feat_rgb.shape[3]
+        )
+        route = torch.softmax(logits, dim=1)
+        exchange = 0.5 * (feat_rgb + feat_tir)
+        delta = exchange - base_fused
+        route_exchange = route[:, 1].repeat_interleave(self.group_dim, dim=1)
+        out = base_fused + self.scale * route_exchange * delta
+        return out, route, evidence
+
+
 
 class TemporalChannelCalibration(nn.Module):
     """Temporal-Conditioned Channel Calibration (TC3).
@@ -204,6 +307,90 @@ class UtilityRouter(nn.Module):
         return x
 
 
+class RestrictedTargetMemory(nn.Module):
+    """Identity-initialized FiLM adapter restricted to target-like locations."""
+
+    def __init__(self, dim, hidden_dim=64, scale=0.10,
+                 similarity_threshold=0.35, similarity_temperature=0.10):
+        super().__init__()
+        self.scale = float(scale)
+        self.similarity_threshold = float(similarity_threshold)
+        self.similarity_temperature = float(similarity_temperature)
+        self.norm = nn.LayerNorm(dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, dim * 2),
+        )
+        # Keep the baseline path exact at initialization while retaining a
+        # small gradient signal for the memory branch.
+        nn.init.normal_(self.adapter[-1].weight, std=1e-3)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(self, fused_feat, memory):
+        if memory is None:
+            return fused_feat
+        memory = F.normalize(memory, dim=1)
+        gamma, beta = self.adapter(self.norm(memory)).chunk(2, dim=1)
+        gamma = self.scale * torch.tanh(gamma).unsqueeze(-1).unsqueeze(-1)
+        beta = self.scale * torch.tanh(beta).unsqueeze(-1).unsqueeze(-1)
+        feature_direction = F.normalize(fused_feat, dim=1)
+        similarity = (feature_direction * memory[:, :, None, None]).sum(dim=1, keepdim=True)
+        spatial_gate = torch.sigmoid(
+            (similarity - self.similarity_threshold)
+            / max(self.similarity_temperature, 1e-6)
+        )
+        return fused_feat * (1.0 + spatial_gate * gamma) + spatial_gate * beta
+
+
+class ReliabilityStateMamba(nn.Module):
+    """A tiny Mamba-inspired selective state updater for route prediction."""
+
+    def __init__(self, input_dim=13, state_dim=64):
+        super().__init__()
+        self.input_dim = int(input_dim)
+        self.state_dim = int(state_dim)
+        self.input_norm = nn.LayerNorm(self.input_dim)
+        self.in_proj = nn.Linear(self.input_dim, self.state_dim * 3)
+        self.state_proj = nn.Linear(self.state_dim, self.state_dim)
+        self.state_norm = nn.LayerNorm(self.state_dim)
+        self.route_head = nn.Linear(self.state_dim, 3)
+        self.reliability_head = nn.Linear(self.state_dim, 2)
+
+        nn.init.zeros_(self.route_head.weight)
+        nn.init.zeros_(self.route_head.bias)
+        with torch.no_grad():
+            self.route_head.bias[0] = 2.0
+        nn.init.zeros_(self.reliability_head.weight)
+        nn.init.zeros_(self.reliability_head.bias)
+
+    def init_state(self, batch_size, device, dtype):
+        return torch.zeros(batch_size, self.state_dim, device=device, dtype=dtype)
+
+    def predict(self, state):
+        state = self.state_norm(state)
+        route_logits = self.route_head(state)
+        reliability_logits = self.reliability_head(state)
+        reliability = torch.sigmoid(reliability_logits)
+        return route_logits, reliability, reliability_logits
+
+    def forward_step(self, obs, prev_state=None):
+        state_dtype = self.input_norm.weight.dtype
+        obs = obs.to(dtype=state_dtype)
+        if prev_state is not None:
+            prev_state = prev_state.to(dtype=state_dtype)
+        obs = self.input_norm(obs)
+        if prev_state is None:
+            prev_state = self.init_state(obs.shape[0], obs.device, obs.dtype)
+        x_gate, x_value, x_decay = self.in_proj(obs).chunk(3, dim=1)
+        gate = torch.sigmoid(x_gate)
+        value = torch.tanh(x_value + self.state_proj(prev_state))
+        decay = torch.sigmoid(x_decay)
+        next_state = (1.0 - gate * decay) * prev_state + (gate * decay) * value
+        route_logits, reliability, reliability_logits = self.predict(next_state)
+        return next_state, route_logits, reliability, reliability_logits
+
+
 class TBSITrack(nn.Module):
     """ TBSI with Temporal Token + Quality-Aware Fusion (spatial+channel+MADC+CSR) """
 
@@ -211,7 +398,12 @@ class TBSITrack(nn.Module):
                  use_temporal_tokens=False, num_temporal_tokens=4,
                  use_degradation_aware=False, da_mode='spatial',
                  use_madc=False, use_csr=False, da_v2=False,
-                 use_cutr_lite=False, cutr_hidden_dim=128, cutr_eta=0.10):
+                 use_cutr_lite=False, cutr_hidden_dim=128, cutr_eta=0.10,
+                 use_rtm=False, rtm_hidden_dim=64, rtm_scale=0.10,
+                 rtm_similarity_threshold=0.35, rtm_similarity_temperature=0.10,
+                 use_egir=False, egir_groups=16, egir_hidden=32, egir_scale=0.10,
+                 use_rsm=False, rsm_state_dim=64, rsm_input_dim=13,
+                 rsm_rho=0.10, rsm_reliability_scale=0.50):
         super().__init__()
         hidden_dim = transformer.embed_dim
         self.backbone = transformer
@@ -228,6 +420,19 @@ class TBSITrack(nn.Module):
             self.box_head = _get_clones(self.box_head, 6)
         self.use_cutr_lite = use_cutr_lite
         self.cutr_eta = cutr_eta
+        self.use_egir = bool(use_egir)
+        self.use_rsm = bool(use_rsm)
+        self.rsm_rho = float(rsm_rho)
+        self.rsm_reliability_scale = float(rsm_reliability_scale)
+        if self.use_egir:
+            self.egir = EvidenceGuidedInteractionRouter(
+                dim=hidden_dim, groups=egir_groups, hidden=egir_hidden,
+                scale=egir_scale,
+            )
+        if self.use_rsm:
+            self.rs_mamba = ReliabilityStateMamba(
+                input_dim=rsm_input_dim, state_dim=rsm_state_dim
+            )
 
         # Temporal Token Module (pre-fusion)
         self.use_temporal_tokens = use_temporal_tokens
@@ -255,6 +460,14 @@ class TBSITrack(nn.Module):
         if use_cutr_lite:
             self.utility_router = UtilityRouter(dim=hidden_dim, hidden_dim=cutr_hidden_dim)
 
+        self.use_rtm = use_rtm
+        if use_rtm:
+            self.rtm = RestrictedTargetMemory(
+                dim=hidden_dim, hidden_dim=rtm_hidden_dim, scale=rtm_scale,
+                similarity_threshold=rtm_similarity_threshold,
+                similarity_temperature=rtm_similarity_temperature,
+            )
+
         # Print summary
         parts = []
         if use_temporal_tokens: parts.append(f'TemporalTokens(K={num_temporal_tokens})')
@@ -265,10 +478,19 @@ class TBSITrack(nn.Module):
             parts.append(da_str)
         if use_cutr_lite:
             parts.append(f'CUTR-Lite(eta={cutr_eta}, hidden={cutr_hidden_dim})')
+        if use_rtm:
+            parts.append(f'RTM(hidden={rtm_hidden_dim}, scale={rtm_scale})')
+        if self.use_egir:
+            parts.append(f'EGIR(groups={egir_groups}, scale={egir_scale})')
+        if self.use_rsm:
+            parts.append(f'RS-Mamba(state={rsm_state_dim}, rho={rsm_rho})')
         if parts: print(f'TBSITrack with: {", ".join(parts)}')
 
     def reset_temporal_tokens(self):
         self.temporal_token_state = None
+
+    def reset_rsm_state(self):
+        return None
 
     def forward(self, template: torch.Tensor,
                 search: torch.Tensor,
@@ -277,6 +499,11 @@ class TBSITrack(nn.Module):
                 return_last_attn=False,
                 prev_search: torch.Tensor = None,
                 prev_tokens: torch.Tensor = None,
+                rtm_memory: torch.Tensor = None,
+                rsm_state: torch.Tensor = None,
+                rsm_route_logits: torch.Tensor = None,
+                rsm_reliability: torch.Tensor = None,
+                rsm_reliability_logits: torch.Tensor = None,
                 ):
         """
         Args:
@@ -308,7 +535,12 @@ class TBSITrack(nn.Module):
             feat_curr = x_curr[-1] if isinstance(x_curr, list) else x_curr
             quality_hint = aux_dict.get("quality_signal", None)
             out = self.forward_head(feat_curr, None, temporal_tokens=tokens_updated,
-                                    quality_hint=quality_hint)
+                                    quality_hint=quality_hint,
+                                    rtm_memory=rtm_memory,
+                                    rsm_state=rsm_state,
+                                    rsm_route_logits=rsm_route_logits,
+                                    rsm_reliability=rsm_reliability,
+                                    rsm_reliability_logits=rsm_reliability_logits)
             out['temporal_tokens'] = tokens_updated
             out.update(aux_dict)
             out['backbone_feat'] = x_curr
@@ -325,7 +557,12 @@ class TBSITrack(nn.Module):
             feat_last = x[-1]
         quality_hint = aux_dict.get("quality_signal", None)
         out = self.forward_head(feat_last, None, temporal_tokens=prev_tokens,
-                                quality_hint=quality_hint)
+                                quality_hint=quality_hint,
+                                rtm_memory=rtm_memory,
+                                rsm_state=rsm_state,
+                                rsm_route_logits=rsm_route_logits,
+                                rsm_reliability=rsm_reliability,
+                                rsm_reliability_logits=rsm_reliability_logits)
 
         out.update(aux_dict)
         out['backbone_feat'] = x
@@ -349,6 +586,13 @@ class TBSITrack(nn.Module):
         feat_tir = enc_tir.transpose(1, 2).reshape(B, C, self.feat_sz_s, self.feat_sz_s)
         base_fused = self.tbsi_fuse_search(opt_feat)
 
+        if self.use_egir:
+            egir_fused, egir_route, egir_evidence = self.egir(
+                feat_rgb, feat_tir, base_fused
+            )
+        else:
+            egir_fused, egir_route, egir_evidence = base_fused, None, None
+
         if self.use_degradation_aware:
             if getattr(self, 'da_fusion_mode', 'residual') == 'gate':
                 gate = self.da_fusion.forward_gate_only(feat_rgb, feat_tir)
@@ -359,7 +603,7 @@ class TBSITrack(nn.Module):
                 scale = getattr(self, 'da_fusion_scale', 0.5)
                 fused_feat = base_fused + scale * da_fused
         else:
-            fused_feat = base_fused
+            fused_feat = egir_fused if self.use_egir else base_fused
 
         return {
             'enc_rgb': enc_rgb,
@@ -368,6 +612,8 @@ class TBSITrack(nn.Module):
             'feat_tir': feat_tir,
             'base_fused': base_fused,
             'fused_feat': fused_feat,
+            'egir_route': egir_route,
+            'egir_evidence': egir_evidence,
         }
 
     def _layer_norm_2d(self, feat):
@@ -431,6 +677,53 @@ class TBSITrack(nn.Module):
                 }
         return pred_dict
 
+    def _build_rsm_input(self, fusion_pack, base_head, quality_hint=None):
+        rgb_roi, tir_roi, base_roi, diff_stats = self._build_cutr_router_inputs(fusion_pack)
+        score_stats = self._score_stats(base_head['score_map'])
+        pred_box = base_head['pred_boxes'].mean(dim=1)
+        agreement = F.cosine_similarity(rgb_roi, tir_roi, dim=1, eps=1e-6).unsqueeze(1)
+        if quality_hint is None:
+            quality_vec = base_roi.new_full((base_roi.shape[0], 2), 0.5)
+        else:
+            quality_vec = quality_hint.to(dtype=base_roi.dtype)
+        obs = torch.cat([score_stats, diff_stats, pred_box, agreement, quality_vec], dim=1)
+        return obs
+
+    def _apply_rsm_route(self, fusion_pack, base_head, route_logits, reliability, gt_score_map=None):
+        if route_logits is None:
+            pred_dict = dict(base_head)
+            pred_dict['rsm_applied_action'] = base_head['pred_boxes'].new_zeros(base_head['pred_boxes'].shape[0], dtype=torch.long)
+            return pred_dict
+
+        fused_feat = fusion_pack['base_fused']
+        rgb_direction = self._layer_norm_2d(fusion_pack['feat_rgb']) - self._layer_norm_2d(fused_feat)
+        tir_direction = self._layer_norm_2d(fusion_pack['feat_tir']) - self._layer_norm_2d(fused_feat)
+        route_bias = 0.0
+        if reliability is not None:
+            route_bias = self.rsm_reliability_scale * (reliability - 0.5)
+        adjusted_logits = route_logits.clone()
+        if not isinstance(route_bias, float):
+            adjusted_logits[:, 1:] = adjusted_logits[:, 1:] + route_bias
+        action = adjusted_logits.argmax(dim=1)
+
+        candidates = {
+            'keep': base_head,
+            'rgb': self.forward_head_from_fused(fused_feat + self.rsm_rho * rgb_direction, gt_score_map=gt_score_map),
+            'tir': self.forward_head_from_fused(fused_feat + self.rsm_rho * tir_direction, gt_score_map=gt_score_map),
+        }
+        pred_dict = {}
+        keys = ['pred_boxes', 'score_map', 'size_map', 'offset_map']
+        action_order = ['keep', 'rgb', 'tir']
+        for key in keys:
+            stacked = torch.stack([candidates[name][key] for name in action_order], dim=1)
+            gather_index = action.view(-1, 1, *([1] * (stacked.dim() - 2))).expand(-1, 1, *stacked.shape[2:])
+            pred_dict[key] = torch.gather(stacked, 1, gather_index).squeeze(1)
+        pred_dict['rsm_applied_action'] = action
+        pred_dict['utility_candidates'] = candidates
+        pred_dict['utility_logits'] = route_logits
+        pred_dict['rsm_reliability'] = reliability
+        return pred_dict
+
     def forward_fusion_only(self, cat_feature, quality_hint=None):
         """Extract search RGB/TIR + DA fusion. Returns (B, C, H, W) fused features."""
         return self.get_fusion_pack(cat_feature, quality_hint=quality_hint)['fused_feat']
@@ -450,7 +743,33 @@ class TBSITrack(nn.Module):
             }
         raise NotImplementedError
 
-    def forward_head(self, cat_feature, gt_score_map=None, temporal_tokens=None, quality_hint=None):
+    def _template_memory(self, cat_feature):
+        """Build a stable prototype from the two 8x8 template token blocks."""
+        if not self.use_rtm:
+            return None
+        num_template = 64
+        rgb_template = cat_feature[:, :num_template, :]
+        tir_template = cat_feature[:, 256 + num_template:256 + 2 * num_template, :]
+        return 0.5 * (rgb_template.mean(dim=1) + tir_template.mean(dim=1))
+
+    @staticmethod
+    def extract_rtm_prototype(fused_feat, boxes):
+        """Pool target prototypes from normalized xywh boxes on a feature map."""
+        _, _, height, width = fused_feat.shape
+        prototypes = []
+        for feat, box in zip(fused_feat, boxes):
+            x, y, box_w, box_h = [float(v) for v in box.detach().view(-1)]
+            x1 = max(0, min(width - 1, int(x * width)))
+            y1 = max(0, min(height - 1, int(y * height)))
+            x2 = max(x1 + 1, min(width, int((x + box_w) * width + 0.999)))
+            y2 = max(y1 + 1, min(height, int((y + box_h) * height + 0.999)))
+            prototypes.append(feat[:, y1:y2, x1:x2].mean(dim=(1, 2)))
+        return F.normalize(torch.stack(prototypes, dim=0), dim=1)
+
+    def forward_head(self, cat_feature, gt_score_map=None, temporal_tokens=None,
+                     quality_hint=None, rtm_memory=None, rsm_state=None,
+                     rsm_route_logits=None, rsm_reliability=None,
+                     rsm_reliability_logits=None):
         B, L, C = cat_feature.shape
         num_search_token = 256
 
@@ -470,14 +789,58 @@ class TBSITrack(nn.Module):
         # Fusion (with quality hint from TBSILayer for path-level gating)
         fusion_pack = self.get_fusion_pack(cat_feature, quality_hint=quality_hint)
         fused_feat = fusion_pack['fused_feat']
+        base_head = self.forward_head_from_fused(fusion_pack['base_fused'], gt_score_map=gt_score_map)
+
+        # No template proxy: training and inference both use a prototype pooled
+        # from a preceding search frame. The first tracked frame stays baseline-exact.
+        active_memory = rtm_memory
+        if self.use_rtm:
+            fused_feat = self.rtm(fused_feat, active_memory)
 
         if self.use_cutr_lite:
             return self._apply_cutr_lite(fusion_pack, gt_score_map=gt_score_map)
 
+        if self.use_rsm:
+            pred_dict = dict(base_head) if self.training else self._apply_rsm_route(
+                fusion_pack, base_head, rsm_route_logits, rsm_reliability, gt_score_map=gt_score_map
+            )
+            obs = self._build_rsm_input(fusion_pack, base_head, quality_hint=quality_hint)
+            next_rsm_state, next_route_logits, next_reliability, next_reliability_logits = self.rs_mamba.forward_step(
+                obs, prev_state=rsm_state
+            )
+            if self.training:
+                rgb_direction = self._layer_norm_2d(fusion_pack['feat_rgb']) - self._layer_norm_2d(fusion_pack['base_fused'])
+                tir_direction = self._layer_norm_2d(fusion_pack['feat_tir']) - self._layer_norm_2d(fusion_pack['base_fused'])
+                pred_dict['utility_candidates'] = {
+                    'keep': base_head,
+                    'rgb': self.forward_head_from_fused(
+                        fusion_pack['base_fused'] + self.rsm_rho * rgb_direction,
+                        gt_score_map=gt_score_map,
+                    ),
+                    'tir': self.forward_head_from_fused(
+                        fusion_pack['base_fused'] + self.rsm_rho * tir_direction,
+                        gt_score_map=gt_score_map,
+                    ),
+                }
+                pred_dict['utility_logits'] = rsm_route_logits
+                pred_dict['rsm_reliability_logits'] = rsm_reliability_logits
+            pred_dict['rsm_state'] = next_rsm_state
+            pred_dict['rsm_next_route_logits'] = next_route_logits
+            pred_dict['rsm_next_reliability'] = next_reliability
+            pred_dict['rsm_next_reliability_logits'] = next_reliability_logits
+            pred_dict['rsm_observation'] = obs
+            pred_dict['rsm_reliability'] = rsm_reliability
+            return pred_dict
+
         # TC3: Temporal-Conditioned Channel Calibration
         if self.use_temporal_tokens and temporal_tokens is not None:
             fused_feat = self.tc3(fused_feat, temporal_tokens)
-        return self.forward_head_from_fused(fused_feat, gt_score_map=gt_score_map)
+        pred_dict = self.forward_head_from_fused(fused_feat, gt_score_map=gt_score_map)
+        if self.use_rtm:
+            pred_dict['rtm_memory'] = active_memory
+            pred_dict['rtm_source_feat'] = fusion_pack['fused_feat']
+            pred_dict['rtm_fused_feat'] = fused_feat
+        return pred_dict
 
 
 def build_tbsi_track(cfg, training=True):
@@ -680,6 +1043,20 @@ def build_tbsi_track(cfg, training=True):
     use_cutr_lite = getattr(cfg.MODEL, "CUTR_LITE", False)
     cutr_hidden_dim = getattr(cfg.MODEL, "CUTR_LITE_HIDDEN", 128)
     cutr_eta = getattr(cfg.MODEL, "CUTR_LITE_ETA", 0.10)
+    use_rtm = getattr(cfg.MODEL, "RTM", False)
+    rtm_hidden_dim = getattr(cfg.MODEL, "RTM_HIDDEN", 64)
+    rtm_scale = getattr(cfg.MODEL, "RTM_SCALE", 0.10)
+    rtm_similarity_threshold = getattr(cfg.MODEL, "RTM_SIM_THRESHOLD", 0.35)
+    rtm_similarity_temperature = getattr(cfg.MODEL, "RTM_SIM_TEMPERATURE", 0.10)
+    use_egir = getattr(cfg.MODEL, "EGIR", False)
+    egir_groups = getattr(cfg.MODEL, "EGIR_GROUPS", 16)
+    egir_hidden = getattr(cfg.MODEL, "EGIR_HIDDEN", 32)
+    egir_scale = getattr(cfg.MODEL, "EGIR_SCALE", 0.10)
+    use_rsm = getattr(cfg.MODEL, "RSM", False)
+    rsm_state_dim = getattr(cfg.MODEL, "RSM_STATE_DIM", 64)
+    rsm_input_dim = getattr(cfg.MODEL, "RSM_INPUT_DIM", 13)
+    rsm_rho = getattr(cfg.MODEL, "RSM_RHO", 0.10)
+    rsm_reliability_scale = getattr(cfg.MODEL, "RSM_RELIABILITY_SCALE", 0.50)
 
     if use_da:
         da_str = 'DaFusionV2' if da_v2 else 'DaFusionV1'
@@ -701,6 +1078,20 @@ def build_tbsi_track(cfg, training=True):
         use_cutr_lite=use_cutr_lite,
         cutr_hidden_dim=cutr_hidden_dim,
         cutr_eta=cutr_eta,
+        use_rtm=use_rtm,
+        rtm_hidden_dim=rtm_hidden_dim,
+        rtm_scale=rtm_scale,
+        rtm_similarity_threshold=rtm_similarity_threshold,
+        rtm_similarity_temperature=rtm_similarity_temperature,
+        use_egir=use_egir,
+        egir_groups=egir_groups,
+        egir_hidden=egir_hidden,
+        egir_scale=egir_scale,
+        use_rsm=use_rsm,
+        rsm_state_dim=rsm_state_dim,
+        rsm_input_dim=rsm_input_dim,
+        rsm_rho=rsm_rho,
+        rsm_reliability_scale=rsm_reliability_scale,
     )
 
     # Stage 2: load baseline checkpoint + freeze all except post_fusion_block
@@ -713,29 +1104,69 @@ def build_tbsi_track(cfg, training=True):
             checkpoint = torch.load(baseline_path, map_location="cpu")
             missing, unexpected = model.load_state_dict(checkpoint["net"], strict=False)
             print(f'Stage 2: Loaded baseline from {stage2_baseline}')
-            print(f'  Missing keys (expected): {[k for k in missing if "da_fusion" in k]}')
-            print(f'  Unexpected keys: {len(unexpected)}')
+            expected_missing_fragments = _stage2_trainable_keywords(cfg)
+            unexpected_missing = [
+                k for k in missing
+                if not any(fragment in k for fragment in expected_missing_fragments)
+            ]
+            print(f'  Missing keys: {len(missing)} (sample: {missing[:20]})')
+            print(f'  Unexpected keys: {len(unexpected)} (sample: {unexpected[:20]})')
+            if unexpected_missing or unexpected:
+                raise RuntimeError(
+                    'Stage-2 baseline/config mismatch. unexpected_missing={}, unexpected={}'.format(
+                        unexpected_missing[:20], unexpected[:20]
+                    )
+                )
         else:
             print(f'WARNING: Stage 2 baseline not found: {baseline_path}')
 
-        # Freeze everything EXCEPT post_fusion_block, da_fusion, box_head, and temporal_token
+        # Freeze everything EXCEPT the explicitly selected lightweight module.
+        trainable_keys = _stage2_trainable_keywords(cfg)
         for n, p in model.named_parameters():
-            if any(k in n for k in ["post_fusion_block", "da_fusion", "box_head", "temporal_token"]):
+            if any(k in n for k in trainable_keys):
                 p.requires_grad = True
             else:
                 p.requires_grad = False
+        active_module_keys = _active_stage2_module_keywords(cfg)
+        missing_active = [
+            k for k in active_module_keys
+            if not any(k in n and p.requires_grad for n, p in model.named_parameters())
+        ]
+        if missing_active:
+            raise RuntimeError(
+                'Stage-2 enabled module has no trainable parameters: {}. '
+                'Check module parameter names and freeze whitelist.'.format(missing_active)
+            )
         trainable_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total_count = sum(p.numel() for p in model.parameters())
         print(f'Stage 2: Frozen {total_count - trainable_count:,}/{total_count:,} params. '
               f'Trainable: {trainable_count:,} ({100*trainable_count/total_count:.2f}%)')
+        print(f'Stage 2 trainable keywords: {trainable_keys}')
+        print('Stage 2 trainable parameters:')
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                print('  ' + n)
     elif use_cutr_lite and cutr_baseline and training:
         baseline_path = os.path.join(current_dir, '../../../', cutr_baseline)
         if os.path.exists(baseline_path):
             checkpoint = torch.load(baseline_path, map_location="cpu")
             missing, unexpected = model.load_state_dict(checkpoint["net"], strict=False)
             print(f'CUTR-Lite: Loaded baseline from {cutr_baseline}')
-            print(f'  Missing keys (expected): {[k for k in missing if "utility_router" in k]}')
-            print(f'  Unexpected keys: {len(unexpected)}')
+            expected_missing = [k for k in missing if "utility_router" in k]
+            unexpected_missing = [k for k in missing if "utility_router" not in k]
+            print(f'  Missing keys: {len(missing)} (sample: {missing[:20]})')
+            print(f'  Unexpected keys: {len(unexpected)} (sample: {unexpected[:20]})')
+            if unexpected_missing or unexpected:
+                raise RuntimeError(
+                    'CUTR-Lite baseline/config mismatch. unexpected_missing={}, unexpected={}'.format(
+                        unexpected_missing[:20], unexpected[:20]
+                    )
+                )
+            if not expected_missing:
+                raise RuntimeError(
+                    'CUTR-Lite baseline load found no missing utility_router parameters. '
+                    'Check whether the baseline checkpoint already contains router weights.'
+                )
         else:
             print(f'WARNING: CUTR-Lite baseline not found: {baseline_path}')
 
@@ -744,6 +1175,10 @@ def build_tbsi_track(cfg, training=True):
                 p.requires_grad = ("utility_router" in n)
             trainable_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
             total_count = sum(p.numel() for p in model.parameters())
+            if trainable_count == 0:
+                raise RuntimeError(
+                    'CUTR-Lite router-only enabled, but no utility_router parameters are trainable.'
+                )
             print(f'CUTR-Lite router-only: Frozen {total_count - trainable_count:,}/{total_count:,} params. '
                   f'Trainable: {trainable_count:,} ({100*trainable_count/total_count:.4f}%)')
     elif 'TBSITrack' in cfg.MODEL.PRETRAIN_FILE and training:

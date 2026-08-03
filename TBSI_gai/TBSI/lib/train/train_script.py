@@ -20,6 +20,27 @@ import importlib
 from ..utils.focal_loss import FocalLoss
 
 
+def _write_optimizer_audit(net, optimizer, settings):
+    if settings.local_rank not in [-1, 0]:
+        return
+    log_dir = os.path.dirname(settings.log_file)
+    os.makedirs(log_dir, exist_ok=True)
+    param_to_name = {id(p): n for n, p in net.named_parameters()}
+    path = os.path.join(log_dir, "optimizer_audit.txt")
+    trainable = [(n, p) for n, p in net.named_parameters() if p.requires_grad]
+    with open(path, "w") as f:
+        f.write("Trainable parameters: {} tensors, {:,} scalars\n".format(
+            len(trainable), sum(p.numel() for _, p in trainable)))
+        for group_idx, group in enumerate(optimizer.param_groups):
+            params = [p for p in group["params"] if p.requires_grad]
+            f.write("\n[group {}] lr={} weight_decay={} tensors={} scalars={:,}\n".format(
+                group_idx, group.get("lr"), group.get("weight_decay"),
+                len(params), sum(p.numel() for p in params)))
+            for p in params:
+                f.write("  {}\n".format(param_to_name.get(id(p), "<unnamed>")))
+    print("  optimizer audit saved to {}".format(path))
+
+
 def run(settings):
     settings.description = 'Training script for TBSI RGB-T Tracker'
 
@@ -67,7 +88,8 @@ def run(settings):
 
     # ===== Global optimization settings =====
     torch.backends.cudnn.benchmark = True
-    torch.set_float32_matmul_precision('high')
+    if hasattr(torch, 'set_float32_matmul_precision'):
+        torch.set_float32_matmul_precision('high')
 
     # ===== Channels Last (NHWC) for Tensor Cores acceleration =====
     use_channels_last = getattr(cfg.TRAIN, "CHANNELS_LAST", False)
@@ -117,8 +139,9 @@ def run(settings):
 
     # Optimizer, parameters, and learning rates
     optimizer, lr_scheduler = get_optimizer_scheduler(net, cfg)
+    _write_optimizer_audit(net, optimizer, settings)
     use_amp = getattr(cfg.TRAIN, "AMP", False)
     trainer = LTRTrainer(actor, [loader_train, loader_val], optimizer, settings, lr_scheduler, use_amp=use_amp)
 
     # train process
-    trainer.train(cfg.TRAIN.EPOCH, load_latest=True, fail_safe=True)
+    trainer.train(cfg.TRAIN.EPOCH, load_latest=True, fail_safe=False)

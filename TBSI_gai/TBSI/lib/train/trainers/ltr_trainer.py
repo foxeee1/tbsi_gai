@@ -87,11 +87,7 @@ class LTRTrainer(BaseTrainer):
             # get inputs
             # import ipdb; ipdb.set_trace()
             if self.move_data_to_gpu:
-                if data['visible']:
-                    data['visible'] = data['visible'].to(self.device, non_blocking=True)
-                    data['infrared'] = data['infrared'].to(self.device, non_blocking=True)
-                else:
-                    data = data.to(self.device, non_blocking=True)
+                data = self._move_data_to_device(data)
             self.data_to_gpu_time = time.time()
 
             data['epoch'] = self.epoch
@@ -149,6 +145,21 @@ class LTRTrainer(BaseTrainer):
         print("Avg Data Time: %.5f" % (self.avg_date_time / self.num_frames * batch_size))
         print("Avg GPU Trans Time: %.5f" % (self.avg_gpu_trans_time / self.num_frames * batch_size))
         print("Avg Forward Time: %.5f" % (self.avg_forward_time / self.num_frames * batch_size))
+
+    def _move_data_to_device(self, value):
+        """Move nested dict batches without requiring TensorDict wrappers."""
+        if hasattr(value, 'to'):
+            try:
+                return value.to(self.device, non_blocking=True)
+            except TypeError:
+                return value.to(self.device)
+        if isinstance(value, dict):
+            return {key: self._move_data_to_device(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._move_data_to_device(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._move_data_to_device(item) for item in value)
+        return value
 
     def train_epoch(self):
         """Do one epoch for each loader."""

@@ -30,7 +30,7 @@ from lib.test.evaluation.tracker import Tracker
 
 
 def run_tracker(tracker_name, tracker_param, run_id=None, dataset_name='otb', sequence=None, debug=0, threads=0,
-                num_gpus=8):
+                num_gpus=8, resume_results=False):
     """Run tracker on sequence or dataset.
     args:
         tracker_name: Name of tracking method.
@@ -47,6 +47,7 @@ def run_tracker(tracker_name, tracker_param, run_id=None, dataset_name='otb', se
     if sequence is not None:
         dataset = [dataset[sequence]]
 
+    os.environ['TBSI_RESUME_RESULTS'] = '1' if resume_results else '0'
     trackers = [Tracker(tracker_name, tracker_param, dataset_name, run_id)]
     run_dataset(dataset, trackers, debug, threads, num_gpus=num_gpus
     )
@@ -62,6 +63,8 @@ def main():
     parser.add_argument('--debug', type=int, default=0, help='Debug level.')
     parser.add_argument('--threads', type=int, default=1, help='Number of threads (0/1 = safe sequential mode).')
     parser.add_argument('--num_gpus', type=int, default=8)
+    parser.add_argument('--resume_results', action='store_true',
+                        help='Reuse existing per-sequence result files instead of overwriting them.')
 
     args = parser.parse_args()
 
@@ -71,7 +74,7 @@ def main():
         seq_name = args.sequence
 
     run_tracker(args.tracker_name, args.tracker_param, args.runid, args.dataset_name, seq_name, args.debug,
-                args.threads, num_gpus=args.num_gpus)
+                args.threads, num_gpus=args.num_gpus, resume_results=args.resume_results)
 
 
 if __name__ == '__main__':

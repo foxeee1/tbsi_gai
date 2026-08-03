@@ -113,6 +113,38 @@ cfg.MODEL.CUTR_LITE_ETA = 0.10
 cfg.MODEL.CUTR_LITE_TAU = 0.50
 cfg.MODEL.CUTR_LITE_BASELINE = ""
 
+# Restricted Target Memory: one recent prototype plus the fixed template anchor.
+cfg.MODEL.RTM = False
+cfg.MODEL.RTM_HIDDEN = 64
+cfg.MODEL.RTM_SCALE = 0.10
+cfg.MODEL.RTM_SIM_THRESHOLD = 0.35
+cfg.MODEL.RTM_SIM_TEMPERATURE = 0.10
+cfg.MODEL.RTM_TRAIN_NOISE = 0.02
+cfg.MODEL.RTM_TRAIN_DROP = 0.10
+cfg.MODEL.RTM_MIN_PEAK = 0.40
+cfg.MODEL.RTM_MIN_SIM = 0.45
+cfg.MODEL.RTM_MOMENTUM = 0.95
+cfg.MODEL.RTM_MAX_MOTION = 1.50
+cfg.MODEL.RTM_MAX_SCALE_CHANGE = 0.70
+
+# Evidence-Guided Interaction Routing: group-wise quality routing at the
+# existing fusion interface; disabled by default to preserve baseline behavior.
+cfg.MODEL.EGIR = False
+cfg.MODEL.EGIR_GROUPS = 16
+cfg.MODEL.EGIR_HIDDEN = 32
+cfg.MODEL.EGIR_SCALE = 0.10
+
+# Reliability State Mamba: do not modify backbone features; only predict
+# next-frame modality reliability and keep/rgb/tir route priors.
+cfg.MODEL.RSM = False
+cfg.MODEL.RSM_STATE_DIM = 64
+cfg.MODEL.RSM_INPUT_DIM = 14
+cfg.MODEL.RSM_RHO = 0.10
+cfg.MODEL.RSM_RELIABILITY_SCALE = 0.50
+cfg.MODEL.RSM_MARGIN = 0.02
+cfg.MODEL.RSM_KEEP_WEIGHT = 0.25
+cfg.MODEL.RSM_NONKEEP_WEIGHT = 4.0
+
 # MODEL.HEAD
 cfg.MODEL.HEAD = edict()
 cfg.MODEL.HEAD.TYPE = "CENTER"
@@ -148,6 +180,7 @@ cfg.TRAIN.SOT_PRETRAIN = False  # SOT pretraining with shared backbones
 cfg.TRAIN.TEMPORAL_LR = None  # Independent LR for temporal token params (if set, overrides default grouping)
 cfg.TRAIN.ROUTER_LR = None    # Independent LR for dgs_router params
 cfg.TRAIN.UTILITY_WEIGHT = 1.0
+cfg.TRAIN.RSM_RELIABILITY_WEIGHT = 0.5
 cfg.TRAIN.ROUTER_ONLY = False
 
 cfg.TRAIN.BN_MOMENTUM = None  # BN momentum override (None = use default 0.1)

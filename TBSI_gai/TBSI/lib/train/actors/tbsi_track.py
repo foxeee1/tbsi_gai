@@ -26,9 +26,66 @@ class TBSITrackActor(BaseActor):
 
         num_search = data['visible']['search_images'].shape[0]
         use_temporal = getattr(self.cfg.MODEL, "TEMPORAL_TOKENS", False)
+        use_rtm = getattr(self.cfg.MODEL, "RTM", False)
+        use_rsm = getattr(self.cfg.MODEL, "RSM", False)
 
+        # Two-frame RTM training mirrors inference: pool a prototype from the
+        # preceding search frame, then use it to condition the current frame.
+        if use_rsm and num_search == 2:
+            prev_v = data['visible']['search_images'][0].view(-1, *data['visible']['search_images'].shape[2:])
+            prev_i = data['infrared']['search_images'][0].view(-1, *data['infrared']['search_images'].shape[2:])
+            curr_v = data['visible']['search_images'][1].view(-1, *data['visible']['search_images'].shape[2:])
+            curr_i = data['infrared']['search_images'][1].view(-1, *data['infrared']['search_images'].shape[2:])
+
+            prev_out = self.net(
+                template=[template_img_v, template_img_i],
+                search=[prev_v, prev_i],
+                return_last_attn=False,
+                rsm_state=None,
+            )
+            out_dict = self.net(
+                template=[template_img_v, template_img_i],
+                search=[curr_v, curr_i],
+                return_last_attn=False,
+                rsm_state=prev_out.get('rsm_state', None),
+                rsm_route_logits=prev_out.get('rsm_next_route_logits', None),
+                rsm_reliability=prev_out.get('rsm_next_reliability', None),
+                rsm_reliability_logits=prev_out.get('rsm_next_reliability_logits', None),
+            )
+        elif use_rtm and num_search == 2:
+            prev_v = data['visible']['search_images'][0].view(-1, *data['visible']['search_images'].shape[2:])
+            prev_i = data['infrared']['search_images'][0].view(-1, *data['infrared']['search_images'].shape[2:])
+            curr_v = data['visible']['search_images'][1].view(-1, *data['visible']['search_images'].shape[2:])
+            curr_i = data['infrared']['search_images'][1].view(-1, *data['infrared']['search_images'].shape[2:])
+            prev_box = data['visible']['search_anno'][0].view(-1, 4)
+
+            with torch.no_grad():
+                prev_out = self.net(
+                    template=[template_img_v, template_img_i],
+                    search=[prev_v, prev_i],
+                    return_last_attn=False,
+                )
+                memory = self.net.extract_rtm_prototype(
+                    prev_out['rtm_source_feat'], prev_box
+                )
+
+                noise_std = float(getattr(self.cfg.MODEL, "RTM_TRAIN_NOISE", 0.02))
+                if noise_std > 0:
+                    memory = F.normalize(memory + noise_std * torch.randn_like(memory), dim=1)
+
+                drop_prob = float(getattr(self.cfg.MODEL, "RTM_TRAIN_DROP", 0.10))
+                if drop_prob > 0:
+                    keep = (torch.rand(memory.shape[0], 1, device=memory.device) >= drop_prob).to(memory.dtype)
+                    memory = memory * keep
+
+            out_dict = self.net(
+                template=[template_img_v, template_img_i],
+                search=[curr_v, curr_i],
+                rtm_memory=memory,
+                return_last_attn=False,
+            )
         # Two-frame training: prev frame updates tokens, current frame uses them
-        if use_temporal and num_search == 2:
+        elif use_temporal and num_search == 2:
             prev_v = data['visible']['search_images'][0].view(-1, *data['visible']['search_images'].shape[2:])
             prev_i = data['infrared']['search_images'][0].view(-1, *data['infrared']['search_images'].shape[2:])
             curr_v = data['visible']['search_images'][1].view(-1, *data['visible']['search_images'].shape[2:])
@@ -69,6 +126,10 @@ class TBSITrackActor(BaseActor):
         utility_weight = getattr(self.cfg.TRAIN, "UTILITY_WEIGHT", 0.0)
         if utility_weight > 0:
             loss = loss + utility_weight * utility_loss
+        rsm_reliability_loss = self.compute_rsm_reliability_loss(pred_dict, gt_bbox, gt_gaussian_maps, l1_loss.device)
+        rsm_reliability_weight = getattr(self.cfg.TRAIN, "RSM_RELIABILITY_WEIGHT", 0.0)
+        if rsm_reliability_weight > 0:
+            loss = loss + rsm_reliability_weight * rsm_reliability_loss
 
         if return_status:
             mean_iou = iou.detach().mean()
@@ -77,6 +138,7 @@ class TBSITrackActor(BaseActor):
                       "Loss/l1": l1_loss.item(),
                       "Loss/location": location_loss.item(),
                       "Loss/utility": utility_loss.item(),
+                      "Loss/rsm_reliability": rsm_reliability_loss.item(),
                       "Loss/fcc_aux": fcc_aux_loss.item(),
                       "IoU": mean_iou.item()}
             return loss, status
@@ -93,9 +155,14 @@ class TBSITrackActor(BaseActor):
 
         try:
             giou_loss, iou = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)
-        except Exception:
-            giou_loss = torch.tensor(0.0, device=pred_boxes.device)
-            iou = torch.tensor(0.0, device=pred_boxes.device)
+        except Exception as exc:
+            if getattr(self.cfg.TRAIN, "ALLOW_GIOU_FAILURE", False):
+                giou_loss = torch.tensor(0.0, device=pred_boxes.device)
+                iou = torch.tensor(0.0, device=pred_boxes.device)
+            else:
+                raise RuntimeError(
+                    "GIoU loss failed; refusing to silently train with zero GIoU/IoU."
+                ) from exc
         l1_loss = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)
 
         if 'score_map' in pred_dict:
@@ -150,12 +217,7 @@ class TBSITrackActor(BaseActor):
         )
         return loss
 
-    def compute_utility_loss(self, pred_dict, gt_bbox, gt_gaussian_maps, device):
-        utility_logits = pred_dict.get('utility_logits', None)
-        utility_candidates = pred_dict.get('utility_candidates', None)
-        if utility_logits is None or utility_candidates is None:
-            return torch.tensor(0.0, device=device)
-
+    def _compute_action_losses(self, utility_candidates, gt_bbox, gt_gaussian_maps):
         per_action_losses = []
         action_order = ['keep', 'rgb', 'tir']
         for action_name in action_order:
@@ -165,8 +227,33 @@ class TBSITrackActor(BaseActor):
                 + self.loss_weight['l1'] * cand_terms['l1_loss']
                 + self.loss_weight['focal'] * cand_terms['location_loss']
             )
+        return torch.stack(per_action_losses, dim=1)
 
-        action_losses = torch.stack(per_action_losses, dim=1)
+    def compute_utility_loss(self, pred_dict, gt_bbox, gt_gaussian_maps, device):
+        utility_logits = pred_dict.get('utility_logits', None)
+        utility_candidates = pred_dict.get('utility_candidates', None)
+        if utility_logits is None or utility_candidates is None:
+            return torch.tensor(0.0, device=device)
+
+        action_losses = self._compute_action_losses(utility_candidates, gt_bbox, gt_gaussian_maps)
+        if getattr(self.cfg.MODEL, "RSM", False):
+            margin = float(getattr(self.cfg.MODEL, "RSM_MARGIN", 0.02))
+            keep_weight = float(getattr(self.cfg.MODEL, "RSM_KEEP_WEIGHT", 0.25))
+            nonkeep_weight = float(getattr(self.cfg.MODEL, "RSM_NONKEEP_WEIGHT", 4.0))
+            keep_loss = action_losses[:, 0]
+            rgb_loss = action_losses[:, 1]
+            tir_loss = action_losses[:, 2]
+            target = torch.zeros(action_losses.shape[0], dtype=torch.long, device=device)
+            rgb_win = rgb_loss < torch.minimum(keep_loss, tir_loss) - margin
+            tir_win = tir_loss < torch.minimum(keep_loss, rgb_loss) - margin
+            target = torch.where(rgb_win, torch.ones_like(target), target)
+            target = torch.where(tir_win, torch.full_like(target, 2), target)
+            sample_weight = torch.where(target == 0,
+                                        torch.full_like(keep_loss, keep_weight),
+                                        torch.full_like(keep_loss, nonkeep_weight))
+            ce = F.cross_entropy(utility_logits.float(), target, reduction='none')
+            return (ce * sample_weight).sum() / sample_weight.sum().clamp_min(1e-6)
+
         tau = getattr(self.cfg.MODEL, "CUTR_LITE_TAU", 0.5)
         pi_star = torch.softmax(-action_losses / max(tau, 1e-6), dim=1).detach()
         log_pi = F.log_softmax(utility_logits, dim=1)
@@ -195,3 +282,30 @@ class TBSITrackActor(BaseActor):
                        (centers_y >= y1) & (centers_y <= y2)).to(dtype=penalty.dtype).unsqueeze(1)
         denom = target_mask.sum().clamp_min(1.0)
         return (penalty * target_mask).sum() / denom
+
+    def compute_rsm_reliability_loss(self, pred_dict, gt_bbox, gt_gaussian_maps, device):
+        reliability_logits = pred_dict.get('rsm_reliability_logits', None)
+        utility_candidates = pred_dict.get('utility_candidates', None)
+        if reliability_logits is None or utility_candidates is None:
+            return torch.tensor(0.0, device=device)
+
+        action_losses = self._compute_action_losses(utility_candidates, gt_bbox, gt_gaussian_maps)
+        margin = float(getattr(self.cfg.MODEL, "RSM_MARGIN", 0.02))
+        keep_loss = action_losses[:, 0]
+        rgb_loss = action_losses[:, 1]
+        tir_loss = action_losses[:, 2]
+
+        target = torch.zeros_like(reliability_logits)
+        valid = torch.zeros_like(reliability_logits, dtype=torch.bool)
+        target[:, 0] = (rgb_loss < keep_loss - margin).to(target.dtype)
+        target[:, 1] = (tir_loss < keep_loss - margin).to(target.dtype)
+        valid[:, 0] = (rgb_loss - keep_loss).abs() > margin
+        valid[:, 1] = (tir_loss - keep_loss).abs() > margin
+        if not valid.any():
+            return torch.tensor(0.0, device=device)
+
+        with torch.cuda.amp.autocast(enabled=False):
+            loss = F.binary_cross_entropy_with_logits(
+                reliability_logits.float(), target.float(), reduction='none'
+            )
+            return loss[valid].mean()

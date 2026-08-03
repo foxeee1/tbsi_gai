@@ -1,3 +1,4 @@
+import inspect
 import torch
 from torch.utils.data.distributed import DistributedSampler
 # datasets related
@@ -177,6 +178,7 @@ def build_dataloaders(cfg, settings):
 
 def get_optimizer_scheduler(net, cfg):
     train_cls = getattr(cfg.TRAIN, "TRAIN_CLS", False)
+    stage2_baseline = getattr(cfg.MODEL, "STAGE2_BASELINE", "")
     if train_cls:
         print("Only training classification head. Learnable parameters are shown below.")
         param_dicts = [
@@ -188,9 +190,19 @@ def get_optimizer_scheduler(net, cfg):
                 p.requires_grad = False
             else:
                 print(n)
+    elif stage2_baseline:
+        trainable_params = [(n, p) for n, p in net.named_parameters() if p.requires_grad]
+        if not trainable_params:
+            raise RuntimeError("No trainable parameters found for Stage-2 fine-tuning.")
+        param_dicts = [
+            {"params": [p for _, p in trainable_params], "lr": cfg.TRAIN.LR},
+        ]
+        if is_main_process():
+            print("Stage 2 optimizer: all unfrozen params use TRAIN.LR={}".format(cfg.TRAIN.LR))
+            for n, _ in trainable_params:
+                print(n)
     elif cfg.TRAIN.SOT_PRETRAIN:
         # Stage 2 fine-tuning: freeze except post_fusion_block, box_head, deg_state_token
-        stage2_baseline = getattr(cfg.MODEL, "STAGE2_BASELINE", "")
         if stage2_baseline:
             for n, p in net.named_parameters():
                 if "post_fusion_block" not in n and "box_head" not in n and "deg_state_token" not in n:
@@ -262,11 +274,24 @@ def get_optimizer_scheduler(net, cfg):
                 if p.requires_grad:
                     print(n)
 
+    param_dicts = [
+        group for group in param_dicts
+        if any(p.requires_grad for p in group["params"])
+    ]
+    if not param_dicts:
+        raise RuntimeError("Optimizer received no trainable parameters.")
+
     if cfg.TRAIN.OPTIMIZER == "ADAMW":
         use_fused = getattr(cfg.TRAIN, "FUSED_OPTIMIZER", False)
-        optimizer = torch.optim.AdamW(param_dicts, lr=cfg.TRAIN.LR,
-                                      weight_decay=cfg.TRAIN.WEIGHT_DECAY,
-                                      fused=use_fused)
+        optimizer_kwargs = {
+            'lr': cfg.TRAIN.LR,
+            'weight_decay': cfg.TRAIN.WEIGHT_DECAY,
+        }
+        # PyTorch 1.9 has no fused AdamW argument; keep the legacy path
+        # compatible while preserving fused behavior on newer versions.
+        if use_fused and 'fused' in inspect.signature(torch.optim.AdamW).parameters:
+            optimizer_kwargs['fused'] = True
+        optimizer = torch.optim.AdamW(param_dicts, **optimizer_kwargs)
         if use_fused and is_main_process():
             print("  Fused AdamW optimizer enabled")
     else:

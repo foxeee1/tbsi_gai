@@ -59,7 +59,7 @@ class BaseTrainer:
         else:
             self._checkpoint_dir = None
 
-    def train(self, max_epochs, load_latest=False, fail_safe=True, load_previous_ckpt=False, distill=False):
+    def train(self, max_epochs, load_latest=False, fail_safe=False, load_previous_ckpt=False, distill=False):
         """Do training for the given number of epochs.
         args:
             max_epochs - Max number of training epochs,
@@ -69,6 +69,7 @@ class BaseTrainer:
 
         epoch = -1
         num_tries = 1
+        last_error = None
         for i in range(num_tries):
             try:
                 if load_latest:
@@ -95,7 +96,8 @@ class BaseTrainer:
                         if self._checkpoint_dir:
                             if self.settings.local_rank in [-1, 0]:
                                 self.save_checkpoint()
-            except:
+            except Exception as exc:
+                last_error = exc
                 print('Training crashed at epoch {}'.format(epoch))
                 if fail_safe:
                     self.epoch -= 1
@@ -105,6 +107,11 @@ class BaseTrainer:
                     print('Restarting training from last epoch ...')
                 else:
                     raise
+
+        if last_error is not None:
+            raise RuntimeError(
+                'Training failed after {} attempt(s); refusing to report success.'.format(num_tries)
+            ) from last_error
 
         print('Finished training!')
 
@@ -265,9 +272,15 @@ class BaseTrainer:
 
         assert net_type == checkpoint_dict['net_type'], 'Network is not of correct type.'
 
+        strict_resume = os.environ.get('TBSI_STRICT_TRAIN_RESUME', '1') == '1'
         missing_k, unexpected_k = net.load_state_dict(checkpoint_dict["net"], strict=False)
         print("previous checkpoint is loaded.")
         print("missing keys: ", missing_k)
         print("unexpected keys:", unexpected_k)
+        if strict_resume and (missing_k or unexpected_k):
+            raise RuntimeError(
+                "Training checkpoint/config mismatch. Set TBSI_STRICT_TRAIN_RESUME=0 only "
+                "for an intentional architecture-mismatch warm start."
+            )
 
         return True

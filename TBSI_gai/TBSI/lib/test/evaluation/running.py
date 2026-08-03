@@ -132,25 +132,12 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
             missing = [not os.path.isfile(f) for f in bbox_files]
             return sum(missing) == 0
 
-    if _results_exist() and not debug:
+    resume_results = os.environ.get('TBSI_RESUME_RESULTS', '0') == '1'
+    if _results_exist() and not debug and resume_results:
         print('FPS: {}'.format(-1))
         return
 
     print('Tracker: {} {} {} ,  Sequence: {}'.format(tracker.name, tracker.parameter_name, tracker.run_id, seq.name))
-
-    def _fallback_output():
-        gt = seq.ground_truth_rect
-        if isinstance(gt, (dict, OrderedDict)):
-            obj_id = next(iter(gt))
-            gt_arr = gt[obj_id]
-        else:
-            gt_arr = gt
-        if gt_arr is None:
-            gt_arr = np.zeros((1, 4), dtype=np.float32)
-        init_box = np.array(gt_arr[0]).tolist()
-        num_frames = len(gt_arr)
-        return {'target_bbox': [init_box for _ in range(num_frames)],
-                'time': [0.0 for _ in range(num_frames)]}
 
     timeout_sec = 0 if debug else int(os.environ.get('TBSI_SEQUENCE_TIMEOUT', '0') or 0)
     previous_handler = None
@@ -164,11 +151,15 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
         try:
             output = tracker.run_sequence(seq, debug=debug, run_id=tracker.run_id, name=tracker.parameter_name)
         except SequenceTimeoutError as e:
-            print('[SKIP_TIMEOUT] {} after {}s: {}'.format(seq.name, timeout_sec, e))
-            output = _fallback_output()
+            print('[TIMEOUT] {} after {}s: {}'.format(seq.name, timeout_sec, e))
+            if os.environ.get('TBSI_ALLOW_SEQUENCE_FAILURE', '0') == '1':
+                return
+            raise
         except Exception as e:
             print(e)
-            return
+            if os.environ.get('TBSI_ALLOW_SEQUENCE_FAILURE', '0') == '1':
+                return
+            raise
         finally:
             if timeout_sec > 0 and hasattr(signal, 'SIGALRM'):
                 signal.alarm(0)
