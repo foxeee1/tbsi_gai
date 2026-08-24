@@ -135,10 +135,20 @@ class Block(nn.Module):
 class CASTBlock(nn.Module):
 
     def __init__(self, dim, num_heads, mode, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, use_attn_gate=False):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, use_attn_gate=False,
+                 use_smsa=False, smsa_alpha=1.3, smsa_fp32=True,
+                 use_ctvm=False, ctvm_use_smsa_support=True, ctvm_gamma_init=0.01,
+                 ctvm_detach_input=True, ctvm_relation_mode='global'):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.attn_reshape = Attention_st(dim, mode, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.attn_reshape = Attention_st(dim, mode, num_heads=num_heads, qkv_bias=qkv_bias,
+                                         attn_drop=attn_drop, proj_drop=drop,
+                                         use_smsa=use_smsa, smsa_alpha=smsa_alpha,
+                                         smsa_fp32=smsa_fp32, use_ctvm=use_ctvm,
+                                         ctvm_use_smsa_support=ctvm_use_smsa_support,
+                                         ctvm_gamma_init=ctvm_gamma_init,
+                                         ctvm_detach_input=ctvm_detach_input,
+                                         ctvm_relation_mode=ctvm_relation_mode)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)

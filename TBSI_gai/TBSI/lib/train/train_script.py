@@ -67,7 +67,10 @@ def run(settings):
 
     # ===== Global optimization settings =====
     torch.backends.cudnn.benchmark = True
-    torch.set_float32_matmul_precision('high')
+    # This helper was introduced after the historical PyTorch 1.9 setup.
+    # Keep the baseline runnable in both the historical and current envs.
+    if hasattr(torch, 'set_float32_matmul_precision'):
+        torch.set_float32_matmul_precision('high')
 
     # ===== Channels Last (NHWC) for Tensor Cores acceleration =====
     use_channels_last = getattr(cfg.TRAIN, "CHANNELS_LAST", False)

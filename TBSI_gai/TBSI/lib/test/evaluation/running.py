@@ -123,7 +123,11 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
             missing = [not os.path.isfile(f) for f in bbox_files]
             return sum(missing) == 0
 
-    if _results_exist() and not debug:
+    # Diagnostic passes must replay sequences even when prediction files
+    # already exist; the gated hook writes per-frame internal statistics.
+    diagnostic = os.environ.get('TBSI_ATTR_STATS', '0') == '1'
+    benchmark_no_save = os.environ.get('TBSI_BENCHMARK_NO_SAVE', '0') == '1'
+    if _results_exist() and not debug and not diagnostic and not benchmark_no_save:
         print('FPS: {}'.format(-1))
         return
 
@@ -149,7 +153,7 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
 
     print('FPS: {}'.format(num_frames / exec_time))
 
-    if not debug:
+    if not debug and not benchmark_no_save:
         _save_tracker_output(seq, tracker, output)
 
 

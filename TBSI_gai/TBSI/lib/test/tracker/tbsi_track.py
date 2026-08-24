@@ -1,4 +1,5 @@
 import math
+import json
 
 from lib.models.tbsi_track import build_tbsi_track
 from lib.test.tracker.basetracker import BaseTracker
@@ -28,14 +29,19 @@ class TBSITrack(BaseTracker):
             _checkpoint_cache[ckpt_key] = torch.load(self.params.checkpoint, map_location='cpu')['net']
         network.load_state_dict(_checkpoint_cache[ckpt_key], strict=True)
         self.cfg = params.cfg
-        self.network = network.cuda().half()
+        self.use_fp16 = os.environ.get('TBSI_INFER_FP16', '1') != '0'
+        self.network = network.cuda()
+        if self.use_fp16:
+            self.network = self.network.half()
         self.network.eval()
         self.preprocessor = Preprocessor()
         self.state = None
 
         self.feat_sz = self.cfg.TEST.SEARCH_SIZE // self.cfg.MODEL.BACKBONE.STRIDE
         # motion constrain
-        self.output_window = hann2d(torch.tensor([self.feat_sz, self.feat_sz]).long(), centered=True).cuda().half()
+        self.output_window = hann2d(torch.tensor([self.feat_sz, self.feat_sz]).long(), centered=True).cuda()
+        if self.use_fp16:
+            self.output_window = self.output_window.half()
 
         # for debug
         self.debug = params.debug
@@ -52,13 +58,14 @@ class TBSITrack(BaseTracker):
         # for save boxes from all queries
         self.save_all_boxes = params.save_all_boxes
         self.z_dict1 = {}
+        self.attr_stats_path = os.environ.get('TBSI_ATTR_STATS_PATH', '')
 
     def initialize(self, image, info: dict):
         # forward the template once (FP16)
         z_patch_arr, resize_factor, z_amask_arr = sample_target(image, info['init_bbox'], self.params.template_factor,
                                                     output_sz=self.params.template_size)
         self.z_patch_arr = z_patch_arr
-        template = self.preprocessor.process(z_patch_arr, z_amask_arr, half=True)
+        template = self.preprocessor.process(z_patch_arr, z_amask_arr, half=self.use_fp16)
         self.z_dict1 = template
 
         self.box_mask_z = None
@@ -81,9 +88,10 @@ class TBSITrack(BaseTracker):
     def track(self, image, info: dict = None):
         H, W, _ = image.shape
         self.frame_id += 1
+        state_before = list(self.state)
         x_patch_arr, resize_factor, x_amask_arr = sample_target(image, self.state, self.params.search_factor,
                                                                 output_sz=self.params.search_size)  # (x1, y1, w, h)
-        search = self.preprocessor.process(x_patch_arr, x_amask_arr, half=True)
+        search = self.preprocessor.process(x_patch_arr, x_amask_arr, half=self.use_fp16)
 
         x_dict = search
         # merge the template and the search
@@ -92,6 +100,12 @@ class TBSITrack(BaseTracker):
             template=[self.z_dict1.tensors[:,:3,:,:],self.z_dict1.tensors[:,3:,:,:]],
             search=[x_dict.tensors[:,:3,:,:], x_dict.tensors[:,3:,:,:]],
             ce_template_mask=self.box_mask_z)
+
+        if self.attr_stats_path and os.environ.get('TBSI_ATTR_STATS', '0') == '1' and info is not None:
+            self._record_smsa_support_stats(
+                info, state_before, float(resize_factor),
+                sequence_name=info.get('sequence_name', 'unknown'),
+                frame_num=info.get('frame_num', self.frame_id))
 
         # add hann windows (all GPU FP16, no CPU sync)
         pred_score_map = out_dict['score_map']
@@ -137,6 +151,59 @@ class TBSITrack(BaseTracker):
                     "all_boxes": all_boxes_save}
         else:
             return {"target_bbox": self.state}
+
+    def _record_smsa_support_stats(self, info, state_before, resize_factor,
+                                   sequence_name, frame_num):
+        """Write per-frame SMSA support diagnostics without changing inference."""
+        gt = info.get('gt_bbox')
+        if gt is None:
+            return
+        search_size = float(self.params.search_size)
+        half_side = 0.5 * search_size / resize_factor
+        cx = state_before[0] + 0.5 * state_before[2]
+        cy = state_before[1] + 0.5 * state_before[3]
+        crop_x = cx - half_side
+        crop_y = cy - half_side
+        gx, gy, gw, gh = [float(v) for v in gt]
+        gx = (gx - crop_x) * resize_factor
+        gy = (gy - crop_y) * resize_factor
+        gw *= resize_factor
+        gh *= resize_factor
+        rows = []
+        yy, xx = torch.meshgrid(torch.arange(16), torch.arange(16))
+        token_x0, token_y0 = xx.flatten().float() * 16.0, yy.flatten().float() * 16.0
+        token_x1, token_y1 = token_x0 + 16.0, token_y0 + 16.0
+        gt_mask = (token_x1 > gx) & (token_x0 < gx + gw) & (token_y1 > gy) & (token_y0 < gy + gh)
+        gt_count = max(int(gt_mask.sum().item()), 1)
+        layer_ids = getattr(self.cfg.MODEL.BACKBONE, 'TBSI_LOC', [3, 6, 9])
+        for layer_id, layer in zip(layer_ids, self.network.backbone.tbsi_layers):
+            for direction, block in (('TIR2F', layer.ca_s2t_i2f), ('RGB2F', layer.ca_s2t_v2f)):
+                attn = getattr(block.attn_reshape, 'last_smsa_attention', None)
+                if attn is None:
+                    continue
+                p = attn.detach().float().cpu()[0]  # [template_query, search_token]
+                active = p > 1e-8
+                mask = gt_mask.view(1, -1)
+                keff = active.sum(dim=-1).float().mean().item()
+                gt_mass = (p * mask).sum(dim=-1).mean().item()
+                active_gt = (active & mask).sum(dim=-1).float()
+                gt_precision = (active_gt / active.sum(dim=-1).clamp_min(1)).mean().item()
+                gt_recall = (active_gt / float(gt_count)).mean().item()
+                rows.append({
+                    'sequence': sequence_name,
+                    'frame': int(frame_num),
+                    'layer': int(layer_id),
+                    'direction': direction,
+                    'Keff': keff,
+                    'GTMass': gt_mass,
+                    'GTPrecision': gt_precision,
+                    'GTRecall': gt_recall,
+                    'BGMass': 1.0 - gt_mass,
+                })
+        if rows:
+            with open(self.attr_stats_path, 'a') as f:
+                for row in rows:
+                    f.write(json.dumps(row) + '\n')
 
     def map_box_back(self, pred_box: list, resize_factor: float):
         cx_prev, cy_prev = self.state[0] + 0.5 * self.state[2], self.state[1] + 0.5 * self.state[3]

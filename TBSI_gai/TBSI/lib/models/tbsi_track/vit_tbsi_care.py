@@ -117,7 +117,11 @@ class VisionTransformerTBSI(BaseBackbone):
                  act_layer=None, weight_init='',
                  tbsi_loc=None, tbsi_drop_path=None,
                  da_in_layer=False, use_attn_gate=False,
-                 use_checkpoint=False):
+                 use_checkpoint=False, use_smsa=False, use_smsa_rgb=None, use_smsa_tir=None,
+                 smsa_alpha=1.3, smsa_fp32=True,
+                 use_ctvm=False, ctvm_use_smsa_support=True, ctvm_gamma_init=0.01,
+                 ctvm_detach_input=True, ctvm_relation_mode='global',
+                 use_tcmr=False, tcmr_mix_strength=0.10):
         """
         Args:
             img_size (int, tuple): input image size
@@ -171,9 +175,18 @@ class VisionTransformerTBSI(BaseBackbone):
         self.use_checkpoint = use_checkpoint
         if self.tbsi_loc is not None and type(self.tbsi_loc) == list:
             for i in range(len(self.tbsi_loc)):
-                self.tbsi_layers.append(TBSILayer(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=self.tbsi_drop_path[i], norm_layer=norm_layer, act_layer=act_layer,
-                use_degradation=da_in_layer, use_attn_gate=use_attn_gate))
+                self.tbsi_layers.append(TBSILayer(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias, drop=drop_rate, attn_drop=attn_drop_rate,
+                    drop_path=self.tbsi_drop_path[i], norm_layer=norm_layer, act_layer=act_layer,
+                    use_degradation=da_in_layer, use_attn_gate=use_attn_gate,
+                    use_smsa=use_smsa, use_smsa_rgb=use_smsa_rgb, use_smsa_tir=use_smsa_tir,
+                    smsa_alpha=smsa_alpha, smsa_fp32=smsa_fp32,
+                    use_ctvm=use_ctvm, ctvm_use_smsa_support=ctvm_use_smsa_support,
+                    ctvm_gamma_init=ctvm_gamma_init,
+                    ctvm_detach_input=ctvm_detach_input,
+                    ctvm_relation_mode=ctvm_relation_mode,
+                    use_tcmr=use_tcmr,
+                    tcmr_mix_strength=tcmr_mix_strength))
 
         self.init_weights(weight_init)
 
@@ -224,6 +237,59 @@ class VisionTransformerTBSI(BaseBackbone):
         
         aux_dict = {"attn": None}
         return self.norm(x), aux_dict
+
+    def get_smsa_stats(self):
+        values = [layer.get_smsa_stats() for layer in self.tbsi_layers]
+        values = [value for value in values if value is not None]
+        if not values:
+            return None
+        return {key: sum(value[key] for value in values) / len(values) for key in values[0]}
+
+    def get_ctvm_stats(self):
+        values = [layer.get_ctvm_stats() for layer in self.tbsi_layers]
+        values = [value for value in values if value is not None]
+        if not values:
+            return None
+        return {key: sum(value[key] for value in values) / len(values) for key in values[0]}
+
+    def get_tcmr_state(self):
+        return [layer.get_tcmr_state() for layer in self.tbsi_layers
+                if layer.get_tcmr_state() is not None]
+
+    def get_tsms_attention(self):
+        """Return training-graph SMSA attentions with their TBSI locations.
+
+        The actor consumes this immediately to build the TSMS coverage loss.
+        It is deliberately separate from the detached inference diagnostics.
+        """
+        values = []
+        for index, layer in enumerate(self.tbsi_layers):
+            location = self.tbsi_loc[index] if index < len(self.tbsi_loc) else index
+            for name, block in (('RGB2F', layer.ca_s2t_i2f),
+                                ('TIR2F', layer.ca_s2t_v2f)):
+                attention = getattr(block.attn_reshape,
+                                     'last_smsa_attention_for_loss', None)
+                if attention is not None:
+                    values.append((location, name, attention))
+        return values
+
+    def get_smsa_reference_attention(self):
+        """Return detached SMSA maps from a frozen reference backbone."""
+        values = []
+        for index, layer in enumerate(self.tbsi_layers):
+            location = self.tbsi_loc[index] if index < len(self.tbsi_loc) else index
+            for name, block in (('RGB2F', layer.ca_s2t_i2f),
+                                ('TIR2F', layer.ca_s2t_v2f)):
+                attention = getattr(block.attn_reshape, 'last_smsa_attention', None)
+                if attention is not None:
+                    values.append((location, name, attention.detach()))
+        return values
+
+    def clear_tsms_attention(self):
+        """Release the previous training graph after backward has started."""
+        for layer in self.tbsi_layers:
+            for block in (layer.ca_s2t_i2f, layer.ca_s2t_v2f):
+                block.attn_reshape.last_smsa_attention_for_loss = None
 
     def init_weights(self, mode=''):
         assert mode in ('jax', 'jax_nlhb', 'nlhb', '')

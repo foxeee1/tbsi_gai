@@ -26,7 +26,8 @@ class LasHeR(BaseVideoDataset):
     Download dataset from https://github.com/BUGPLEASEOUT/LasHeR
     """
 
-    def __init__(self, root=None, image_loader=jpeg4py_loader, split=None, seq_ids=None, data_fraction=None):
+    def __init__(self, root=None, image_loader=jpeg4py_loader, split=None, seq_ids=None,
+                 data_fraction=None, sequence_list_file=None):
         """
         args:
             root - path to the lasher training data.
@@ -41,7 +42,11 @@ class LasHeR(BaseVideoDataset):
         super().__init__('LasHeR_add', root, image_loader)
 
         # all folders inside the root
-        self.sequence_list = self._get_sequence_list(split)
+        if sequence_list_file is not None:
+            with open(sequence_list_file) as f:
+                self.sequence_list = [x.strip() for x in f if x.strip()]
+        else:
+            self.sequence_list = self._get_sequence_list(split)
 
         if data_fraction is not None:
             self.sequence_list = random.sample(self.sequence_list, int(len(self.sequence_list)*data_fraction))
@@ -59,7 +64,11 @@ class LasHeR(BaseVideoDataset):
 
         # ---- CACHE: On-the-fly decoded image cache (bounded FIFO, per-worker via fork COW) ----
         self._image_cache = {}
-        self._image_cache_max_size = 5000  # ~8 GB/worker, catches template reuse
+        # The cache is useful for the canonical full run, but each DataLoader
+        # worker owns a copy. RPP can lower it without changing baseline
+        # semantics through an explicit runtime-only environment override.
+        cache_limit = os.environ.get("TBSI_RPP_IMAGE_CACHE_MAX_SIZE")
+        self._image_cache_max_size = int(cache_limit) if cache_limit is not None else 5000
         self._cache_hits = 0
         self._cache_misses = 0
 

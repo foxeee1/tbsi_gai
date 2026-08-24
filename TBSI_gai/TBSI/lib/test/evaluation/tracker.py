@@ -96,15 +96,21 @@ class Tracker:
         init_info = seq.init_info()
 
         # Reuse cached tracker for same checkpoint path (avoids 2.3GB reload per sequence)
-        # Thread-safe: only one thread creates model, others wait and reuse
+        # Thread-safe: only one thread creates model, others wait and reuse.
+        # A tracker carries per-sequence state, so disable reuse for parity
+        # probes and debugging runs that may execute sequences concurrently.
         cache_key = (self.name, self.parameter_name, params.checkpoint)
-        with Tracker._model_lock:
-            if cache_key != Tracker._tracker_cache_params_key or Tracker._tracker_cache is None:
-                tracker = self.create_tracker(params)
-                Tracker._tracker_cache = tracker
-                Tracker._tracker_cache_params_key = cache_key
-            else:
-                tracker = Tracker._tracker_cache
+        disable_cache = os.environ.get('TBSI_DISABLE_TRACKER_CACHE', '0') == '1'
+        if disable_cache:
+            tracker = self.create_tracker(params)
+        else:
+            with Tracker._model_lock:
+                if cache_key != Tracker._tracker_cache_params_key or Tracker._tracker_cache is None:
+                    tracker = self.create_tracker(params)
+                    Tracker._tracker_cache = tracker
+                    Tracker._tracker_cache_params_key = cache_key
+                else:
+                    tracker = Tracker._tracker_cache
 
         # Reset temporal tokens for new sequence (key for multi-seq eval)
         if hasattr(tracker, 'reset_temporal_tokens'):
@@ -172,6 +178,8 @@ class Tracker:
 
             info = seq.frame_info(frame_num)
             info['previous_output'] = prev_output
+            info['sequence_name'] = seq.name
+            info['frame_num'] = frame_num
 
             if len(seq.ground_truth_rect) > 1:
                 info['gt_bbox'] = seq.ground_truth_rect[frame_num]
@@ -320,6 +328,4 @@ class Tracker:
             return decode_img(image_file[0], image_file[1])
         else:
             raise ValueError("type of image_file should be str or list")
-
-
 

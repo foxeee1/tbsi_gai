@@ -13,6 +13,7 @@ from torch.cuda.amp import autocast
 from torch.cuda.amp import GradScaler
 
 from lib.utils.misc import get_world_size
+from lib.utils import TensorDict
 from .diagnostics import Diagnostics
 
 
@@ -55,6 +56,10 @@ class LTRTrainer(BaseTrainer):
             self.scaler = GradScaler()
         self.accum_steps = getattr(settings, 'grad_accum_steps', 1)
         self.accum_count = 0
+        self.debug_finite = os.environ.get('TBSI_DEBUG_FINITE', '0') == '1'
+        self.finite_debug_file = os.path.join(
+            os.path.dirname(getattr(settings, 'log_file', os.path.join(settings.save_dir, 'logs'))),
+            'finite_debug.log')
 
         # Lightweight diagnostics (gradient flow, loss decomposition, internal signals)
         if settings.local_rank in [-1, 0] and getattr(settings, 'use_diagnostics', True):
@@ -63,6 +68,22 @@ class LTRTrainer(BaseTrainer):
             print(f"  Diagnostics enabled → {log_dir}/gradient_flow.csv")
         else:
             self.diagnostics = None
+
+    def _debug_finite_gradients(self, step, epoch):
+        """Optional finite-gradient audit before clipping/optimizer step."""
+        if not self.debug_finite:
+            return True
+        bad = []
+        for name, param in self.actor.net.named_parameters():
+            if param.grad is not None and not torch.isfinite(param.grad).all():
+                bad.append(name)
+        if bad:
+            line = 'step=%d epoch=%d nonfinite_gradients=%s\n' % (step, epoch, ','.join(bad))
+            print('FINITE_DEBUG:', line.rstrip())
+            with open(self.finite_debug_file, 'a') as f:
+                f.write(line)
+            return False
+        return True
 
     def _set_default_settings(self):
         # Dict of all default values
@@ -86,6 +107,13 @@ class LTRTrainer(BaseTrainer):
             self.data_read_done_time = time.time()
             # get inputs
             # import ipdb; ipdb.set_trace()
+            # The RGB-T sampler returns a plain dict containing TensorDict
+            # branches. Normalize the outer container before device transfer.
+            if isinstance(data, dict) and not isinstance(data, TensorDict):
+                data = TensorDict({
+                    key: TensorDict(value) if isinstance(value, dict) else value
+                    for key, value in data.items()
+                })
             if self.move_data_to_gpu:
                 if data['visible']:
                     data['visible'] = data['visible'].to(self.device, non_blocking=True)
@@ -110,6 +138,7 @@ class LTRTrainer(BaseTrainer):
                     loss.backward()
                     self.accum_count += 1
                     if self.accum_count % self.accum_steps == 0:
+                        self._debug_finite_gradients(i, self.epoch)
                         if self.settings.grad_clip_norm > 0:
                             torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
                         # Diagnostics: capture gradients BEFORE optimizer.step() and zero_grad()
@@ -122,6 +151,7 @@ class LTRTrainer(BaseTrainer):
                     self.accum_count += 1
                     if self.accum_count % self.accum_steps == 0:
                         self.scaler.unscale_(self.optimizer)
+                        self._debug_finite_gradients(i, self.epoch)
                         if self.settings.grad_clip_norm > 0:
                             torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
                         # Diagnostics: capture gradients BEFORE optimizer.step() and zero_grad()

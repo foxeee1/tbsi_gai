@@ -18,7 +18,7 @@ class LasHeRDataset(BaseDataset):
 
     Download dataset from https://github.com/BUGPLEASEOUT/LasHeR
     """
-    def __init__(self, split):
+    def __init__(self, split, sequence_list_file=None):
         super().__init__()
         # Split can be test, val, or ltrval (a validation split consisting of videos from the official train set)
         if split == 'testingset' or split == 'val':
@@ -26,7 +26,11 @@ class LasHeRDataset(BaseDataset):
         else:
             self.base_path = os.path.join(self.env_settings.lasher_path, 'train')
 
-        self.sequence_list = self._get_sequence_list(split)
+        if sequence_list_file is not None:
+            with open(sequence_list_file) as f:
+                self.sequence_list = [x.strip() for x in f if x.strip()]
+        else:
+            self.sequence_list = self._get_sequence_list(split)
         self.split = split
 
     def get_sequence_list(self):
@@ -62,3 +66,12 @@ class LasHeRDataset(BaseDataset):
 
         sequence_list = [s for s in sequence_list if s not in SKIP_SEQUENCES]
         return sequence_list
+
+
+class RPPLasHeRDataset(LasHeRDataset):
+    """Frozen stratified RPP-v1 test subset; list is supplied by the runner."""
+    def __init__(self, split='testingset'):
+        sequence_list_file = os.environ.get('TBSI_RPP_TEST_LIST')
+        if not sequence_list_file:
+            raise RuntimeError('TBSI_RPP_TEST_LIST is required for rpp_lasher_test')
+        super().__init__(split=split, sequence_list_file=sequence_list_file)

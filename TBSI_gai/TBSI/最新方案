@@ -1,0 +1,201 @@
+我认可这条新主线，但我的认可度约为 88%～90%，不是直接照搬 93%。
+
+核心理由是：它把 CTVM 从“无监督改变 feature”改成“用 tracking 任务监督 medium 构建”，解决了当前 CTVM 的根本问题。当前创新点一建议正式转为：
+
+> TSRM：Task-Supervised Reliable Medium  
+> 先做 TSMS，再做 TCMR；暂时放弃旧 CTVM。
+
+## 实验阶段一：TSMS
+
+已有结果作为固定参照：
+
+| 组别 | 说明 |
+|---|---|
+| A0 | 原始 TBSI baseline |
+| A1 | baseline + SMSA |
+| A2 | baseline + SMSA + TSMS |
+
+A0、A1 使用已有 full 结果，新增只实现 A2。
+
+### TSMS 实现
+
+保留原始 Entmax：
+
+```text
+A = Entmax(QKᵀ)
+```
+
+训练期根据 search crop 中的 GT 框生成 soft target mask：
+
+```text
+M_gt ∈ [0, 1]
+```
+
+建议采用：
+
+- GT box；
+- 适度 dilation；
+- 中心 Gaussian；
+- 映射到 search token 的 16×16 网格。
+
+不使用硬 mask，也不在推理阶段输入 GT。
+
+### 第一版损失只用 coverage loss
+
+```text
+S_gt = Σ Ā_n M_gt,n
+
+L_cov = max(0, ρ - S_gt)
+L = L_track + λ_cov L_cov
+```
+
+第一轮不要同时加入背景抑制损失，避免无法判断收益来自哪里。
+
+只有 A2 证明有效后，再增加：
+
+```text
+L_bg = Σ Ā_n (1 - M_gt,n)
+```
+
+形成 A2b。
+
+### TSMS 必须记录
+
+按 L3、L6、L9，以及 RGB2F、TIR2F 分开统计：
+
+- GTMass；
+- GTRecall；
+- GTPrecision；
+- BGMass；
+- effective support；
+- entropy；
+- zero ratio；
+- background mass；
+- `L_cov`；
+- tracking loss；
+- IoU；
+- AUC；
+- catastrophic loss 数量。
+
+### TSMS 判定
+
+A2 通过需要满足：
+
+- GTRecall 明显上升；
+- BGMass 不出现明显恶化；
+- effective support 不坍缩；
+- 训练无 NaN/Inf；
+- tracking IoU 不系统性下降；
+- full confirmation 中 A2 不低于 A1。
+
+这里不要求 attention 全部集中到 GT，因为 TBSI 需要保留目标周围环境和边界上下文。
+
+## 实验阶段二：TCMR
+
+只有 A2 通过后，才做 TCMR。
+
+TCMR 必须放在：
+
+```text
+RGB s2t medium candidate
+TIR s2t medium candidate
+        ↓
+       TCMR
+        ↓
+current fused medium
+```
+
+而不是做普通的最终 feature fusion。
+
+设：
+
+```text
+Z_v = RGB medium candidate
+Z_i = TIR medium candidate
+r = softmax(g(Z_v, Z_i))
+Z = r_v Z_v + r_i Z_i
+```
+
+TCMR 的监督目标不是人工的 RGB/TIR 质量标签，而是训练期的 modality-specific localization utility：
+
+```text
+q_v* = stopgrad(utility(Z_v))
+q_i* = stopgrad(utility(Z_i))
+p* = softmax([q_v*, q_i*] / τ)
+L_route = KL(p* || r)
+```
+
+推理时不使用 GT，也不保留辅助监督头，只保留 TCMR router。
+
+第一版建议先使用轻量 modality-specific localization head，不要复制完整 tracking head。
+
+## 实验阶段三：TCMR 消融
+
+| 组别 | SMSA | TSMS | TCMR |
+|---|---:|---:|---:|
+| A0 | × | × | × |
+| A1 | ✓ | × | × |
+| A2 | ✓ | ✓ | × |
+| A3 | ✓ | × | ✓ |
+| A4 | ✓ | ✓ | ✓ |
+
+最关键的两个比较：
+
+```text
+A2 - A1：TSMS 是否有效？
+A4 - A2：TCMR 是否在任务监督 support 上继续带来收益？
+```
+
+不要把旧 CTVM 放入主消融表。它应作为失败对照：
+
+```text
+SMSA + old CTVM：negative comparator
+```
+
+## 推荐执行顺序
+
+```text
+已有 A0/A1
+   ↓
+实现并训练 A2：SMSA + L_cov
+   ↓
+检查 GT support 与 tracking 指标
+   ↓
+A2 通过后实现 A3：SMSA + TCMR
+   ↓
+A3 通过后实现 A4：TSMS + TCMR
+   ↓
+A4 vs A2 full confirmation
+```
+
+由于当前 proxy RPP gate 失败：
+
+- proxy 只能看机制信号；
+- 不能用 proxy AUC 判断最终涨点；
+- A2/A4 最终必须走 full confirmation；
+- 至少对最终候选使用两个 seed。
+
+## 主要停止条件
+
+以下任一情况出现就停止该分支：
+
+- A2 GTRecall 上升但 tracking 持续下降；
+- TSMS 造成 support collapse；
+- router 长期输出 `r_v≈1` 或 `r_i≈1`；
+- route utility 与实际 modality tracking utility 不一致；
+- A4 不优于 A2；
+- A4 full AUC 低于 SMSA-only。
+
+## 最终判断
+
+我建议现在不要再修旧 CTVM，也不要直接实现 TSMS+TCMR 全组合。
+
+最稳的创新点一路线是：
+
+```text
+SMSA
+→ TSMS：让稀疏 support 接受目标监督
+→ TCMR：让模态写入接受定位效用监督
+```
+
+其中 A2 是第一关键实验，A4 是最终创新点一候选。

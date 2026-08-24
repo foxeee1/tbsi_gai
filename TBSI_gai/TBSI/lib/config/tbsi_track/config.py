@@ -52,6 +52,49 @@ cfg.MODEL.DA_FUSION_MODE = "residual"
 cfg.MODEL.DA_FUSION_SCALE = 0.5
 cfg.MODEL.DA_IN_LAYER = False  # Per-layer degradation-aware cross-attention modulation
 
+# RIMA / SMSA MVP. Disabled by default to preserve baseline parity.
+cfg.MODEL.RIMA = edict()
+cfg.MODEL.RIMA.ENABLE = False
+cfg.MODEL.RIMA.SMSA_ENABLE = False
+cfg.MODEL.RIMA.SMSA_RGB_ENABLE = True
+cfg.MODEL.RIMA.SMSA_TIR_ENABLE = True
+cfg.MODEL.RIMA.CTVM_ENABLE = False
+cfg.MODEL.RIMA.CTVM_USE_SMSA_SUPPORT = True
+cfg.MODEL.RIMA.CTVM_GAMMA_INIT = 0.01
+cfg.MODEL.RIMA.CTVM_DETACH_INPUT = True
+cfg.MODEL.RIMA.CTVM_RELATION_MODE = 'global'
+cfg.MODEL.RIMA.ENTMAX_ALPHA = 1.3
+cfg.MODEL.RIMA.FP32_CORE = True
+cfg.MODEL.RIMA.LOG_STATS = False
+
+# Training-only Target-guided Sparse Modulation (TSMS).
+# This branch never runs in inference and is disabled by default for parity.
+cfg.MODEL.TSMS = edict()
+cfg.MODEL.TSMS.ENABLE = False
+cfg.MODEL.TSMS.RHO = 0.20
+cfg.MODEL.TSMS.LAMBDA_COV = 0.05
+cfg.MODEL.TSMS.RELATIVE_COVERAGE = False
+cfg.MODEL.TSMS.RELATIVE_DELTA = 0.02
+cfg.MODEL.TSMS.PRESERVE_ENABLE = False
+cfg.MODEL.TSMS.LAMBDA_PRESERVE = 0.01
+cfg.MODEL.TSMS.UTILITY_ENABLE = False
+cfg.MODEL.TSMS.UTILITY_LAMBDA = 0.005
+cfg.MODEL.TSMS.UTILITY_MARGIN = 0.01
+cfg.MODEL.TSMS.UTILITY_TOPK = 8
+cfg.MODEL.TSMS.UTILITY_IOU_THRESHOLD = 0.50
+cfg.MODEL.TSMS.DILATION_TOKENS = 1.0
+cfg.MODEL.TSMS.SOFTNESS_TOKENS = 0.5
+cfg.MODEL.TSMS.LOG_STATS = True
+
+# Training-supervised modality routing. Disabled by default for parent parity.
+cfg.MODEL.TCMR = edict()
+cfg.MODEL.TCMR.ENABLE = False
+cfg.MODEL.TCMR.UTILITY_ENABLE = True
+cfg.MODEL.TCMR.UTILITY_LAMBDA = 0.005
+cfg.MODEL.TCMR.UTILITY_TEMPERATURE = 0.5
+cfg.MODEL.TCMR.UTILITY_IOU_THRESHOLD = 0.50
+cfg.MODEL.TCMR.MIX_STRENGTH = 0.10
+
 # MODEL.HEAD
 cfg.MODEL.HEAD = edict()
 cfg.MODEL.HEAD.TYPE = "CENTER"

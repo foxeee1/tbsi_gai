@@ -1,7 +1,8 @@
+import os
 import torch
 from torch.utils.data.distributed import DistributedSampler
 # datasets related
-from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR, MiniLasHeR
+from lib.train.dataset import Lasot, Got10k, MSCOCOSeq, ImagenetVID, TrackingNet, LasHeR
 from lib.train.dataset import Lasot_lmdb, Got10k_lmdb, MSCOCOSeq_lmdb, ImagenetVID_lmdb, TrackingNet_lmdb
 from lib.train.data import sampler, opencv_loader, processing, LTRLoader
 import lib.train.data.transforms as tfm
@@ -32,7 +33,7 @@ def names2datasets(name_list: list, settings, image_loader):
     for name in name_list:
         assert name in ["LASOT", "GOT10K_vottrain", "GOT10K_votval", "GOT10K_train_full", "GOT10K_official_val",
                         "COCO17", "VID", "TRACKINGNET", "LasHeR_train", "LasHeR_test",
-                        "MiniLasHeR_train", "MiniLasHeR_test"]
+                        "RPP_LasHeR_train", "RPP_LasHeR_test", "rpp_lasher_test"]
         if name == "LASOT":
             if settings.use_lmdb:
                 print("Building lasot dataset from lmdb")
@@ -86,12 +87,18 @@ def names2datasets(name_list: list, settings, image_loader):
             datasets.append(LasHeR(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
         if name == "LasHeR_test":
             datasets.append(LasHeR(settings.env.lasher_test_dir, split='test', image_loader=image_loader))
-        # MiniLasHeR: rapid validation subset (30 sequences, 5 categories)
-        if name == "MiniLasHeR_train":
-            datasets.append(MiniLasHeR(settings.env.lasher_train_dir, split='train', image_loader=image_loader))
-        if name == "MiniLasHeR_test":
-            datasets.append(MiniLasHeR(settings.env.lasher_test_dir, split='test', image_loader=image_loader))
-
+        if name == "RPP_LasHeR_train":
+            list_file = os.environ.get("TBSI_RPP_TRAIN_LIST")
+            if not list_file:
+                raise RuntimeError("TBSI_RPP_TRAIN_LIST is required for RPP_LasHeR_train")
+            datasets.append(LasHeR(settings.env.lasher_train_dir, split='train',
+                                   image_loader=image_loader, sequence_list_file=list_file))
+        if name in ("RPP_LasHeR_test", "rpp_lasher_test"):
+            list_file = os.environ.get("TBSI_RPP_TEST_LIST")
+            if not list_file:
+                raise RuntimeError("TBSI_RPP_TEST_LIST is required for RPP_LasHeR_test")
+            datasets.append(LasHeR(settings.env.lasher_test_dir, split='test',
+                                   image_loader=image_loader, sequence_list_file=list_file))
     return datasets
 
 
@@ -144,9 +151,13 @@ def build_dataloaders(cfg, settings):
     train_sampler = DistributedSampler(dataset_train) if settings.local_rank != -1 else None
     shuffle = False if settings.local_rank != -1 else True
 
-    loader_train = LTRLoader('train', dataset_train, training=True, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=shuffle,
-                             num_workers=cfg.TRAIN.NUM_WORKER, drop_last=True, stack_dim=1, sampler=train_sampler,
-                             pin_memory=True)
+    loader_train = LTRLoader(
+        'train', dataset_train, training=True, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=shuffle,
+        num_workers=cfg.TRAIN.NUM_WORKER, drop_last=True, stack_dim=1, sampler=train_sampler,
+        pin_memory=True,
+        prefetch_factor=getattr(cfg.TRAIN, 'PREFETCH_FACTOR', None),
+        persistent_workers=getattr(cfg.TRAIN, 'PERSISTENT_WORKERS', False),
+    )
 
     # Validation samplers and loaders
     dataset_val = sampler.TrackingSampler(datasets=names2datasets(cfg.DATA.VAL.DATASETS_NAME, settings, opencv_loader),
@@ -156,9 +167,14 @@ def build_dataloaders(cfg, settings):
                                           num_template_frames=settings.num_template, processing=data_processing_val,
                                           frame_sample_mode=sampler_mode, train_cls=train_cls)
     val_sampler = DistributedSampler(dataset_val) if settings.local_rank != -1 else None
-    loader_val = LTRLoader('val', dataset_val, training=False, batch_size=cfg.TRAIN.BATCH_SIZE,
-                           num_workers=cfg.TRAIN.NUM_WORKER, drop_last=True, stack_dim=1, sampler=val_sampler,
-                           epoch_interval=cfg.TRAIN.VAL_EPOCH_INTERVAL)
+    loader_val = LTRLoader(
+        'val', dataset_val, training=False, batch_size=cfg.TRAIN.BATCH_SIZE,
+        num_workers=cfg.TRAIN.NUM_WORKER, drop_last=True, stack_dim=1, sampler=val_sampler,
+        epoch_interval=cfg.TRAIN.VAL_EPOCH_INTERVAL,
+        pin_memory=True,
+        prefetch_factor=getattr(cfg.TRAIN, 'PREFETCH_FACTOR', None),
+        persistent_workers=getattr(cfg.TRAIN, 'PERSISTENT_WORKERS', False),
+    )
 
     return loader_train, loader_val
 
@@ -236,9 +252,16 @@ def get_optimizer_scheduler(net, cfg):
 
     if cfg.TRAIN.OPTIMIZER == "ADAMW":
         use_fused = getattr(cfg.TRAIN, "FUSED_OPTIMIZER", False)
-        optimizer = torch.optim.AdamW(param_dicts, lr=cfg.TRAIN.LR,
-                                      weight_decay=cfg.TRAIN.WEIGHT_DECAY,
-                                      fused=use_fused)
+        optimizer_kwargs = {
+            'lr': cfg.TRAIN.LR,
+            'weight_decay': cfg.TRAIN.WEIGHT_DECAY,
+        }
+        # ``fused`` is not a valid keyword in the historical PyTorch 1.9
+        # environment. It is only passed when explicitly requested and
+        # supported by the active AdamW implementation.
+        if use_fused:
+            optimizer_kwargs['fused'] = True
+        optimizer = torch.optim.AdamW(param_dicts, **optimizer_kwargs)
         if use_fused and is_main_process():
             print("  Fused AdamW optimizer enabled")
     else:

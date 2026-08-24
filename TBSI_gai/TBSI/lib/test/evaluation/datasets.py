@@ -26,8 +26,7 @@ dataset_dict = dict(
     lasot_extension_subset=DatasetInfo(module=pt % "lasotextensionsubset", class_name="LaSOTExtensionSubsetDataset",
                                        kwargs=dict()),
     lasher_test=DatasetInfo(module=pt % "lasher", class_name="LasHeRDataset", kwargs=dict(split='testingset')),
-    mini_lasher_test=DatasetInfo(module=pt % "mini_lasher", class_name="MiniLasHeRDataset",
-                                 kwargs=dict(split='testingset')),
+    rpp_lasher_test=DatasetInfo(module=pt % "lasher", class_name="RPPLasHeRDataset", kwargs=dict(split='testingset')),
 )
 
 
