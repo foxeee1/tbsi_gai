@@ -97,12 +97,11 @@ class TBSITrackActor(BaseActor):
                 loss, iou, num_queries, loss.device)
         else:
             tsms_loss, tsms_status = self._compute_tsms_loss(gt_bbox, loss.device)
-        tcmr_loss, tcmr_status = self._compute_tcmr_loss(loss, iou, num_queries, loss.device)
-        loss = loss + tsms_loss + tcmr_loss
+        loss = loss + tsms_loss
         # The attention tensors are retained by the backbone only so this
         # method can add L_cov to the current graph. Clear that reference as
         # soon as backward reaches the final loss to avoid graph accumulation.
-        if tsms_loss.requires_grad or tcmr_loss.requires_grad:
+        if tsms_loss.requires_grad:
             clear_fn = getattr(self.net.backbone, 'clear_tsms_attention', None)
             if clear_fn is not None:
                 loss.register_hook(lambda _grad: clear_fn())
@@ -115,7 +114,6 @@ class TBSITrackActor(BaseActor):
                       "Loss/location": location_loss.item(),
                       "IoU": mean_iou.item()}
             status.update(tsms_status)
-            status.update(tcmr_status)
             smsa_stats = getattr(self.net.backbone, 'get_smsa_stats', lambda: None)()
             if smsa_stats is not None:
                 status.update({
@@ -125,69 +123,9 @@ class TBSITrackActor(BaseActor):
                     'SMSA/norm_error': smsa_stats['norm_error'],
                     'SMSA/nan_inf': smsa_stats['nan_inf'],
                 })
-            ctvm_stats = getattr(self.net.backbone, 'get_ctvm_stats', lambda: None)()
-            if ctvm_stats is not None:
-                status.update({
-                    'CTVM/gamma': ctvm_stats['gamma'],
-                    'CTVM/relation_entropy': ctvm_stats['relation_entropy'],
-                    'CTVM/support_entropy': ctvm_stats['support_entropy'],
-                    'CTVM/nan_inf': ctvm_stats['nan_inf'],
-                })
             return loss, status
         else:
             return loss
-
-    def _compute_tcmr_loss(self, tracking_loss, iou, num_queries, device):
-        settings = getattr(self.cfg.MODEL, 'TCMR', None)
-        get_state = getattr(self.net.backbone, 'get_tcmr_state', None)
-        if settings is None or not getattr(settings, 'ENABLE', False) or not getattr(settings, 'UTILITY_ENABLE', False):
-            return torch.zeros((), device=device), {'TCMR/available': 0.0}
-        states = get_state() if get_state is not None else []
-        if not states or not tracking_loss.requires_grad:
-            return torch.zeros((), device=device), {'TCMR/available': 0.0}
-        iou_per_sample = iou.detach().reshape(-1, num_queries).mean(dim=1)
-        hard = iou_per_sample < float(getattr(settings, 'UTILITY_IOU_THRESHOLD', 0.50))
-        if not bool(hard.any()):
-            return tracking_loss.new_zeros(()), {'TCMR/available': 0.0, 'TCMR/hard_fraction': 0.0}
-
-        losses = []
-        route_entropies = []
-        valid = 0
-        temperature = float(getattr(settings, 'UTILITY_TEMPERATURE', 0.5))
-        for visible, infrared, route in states:
-            gradients = torch.autograd.grad(
-                tracking_loss, (visible, infrared), retain_graph=True,
-                create_graph=False, allow_unused=True)
-            grad_v, grad_i = gradients
-            if grad_v is None or grad_i is None:
-                continue
-            # First-order loss change from retaining each modality candidate.
-            utility_v = -(grad_v.detach().float() * visible.detach().float()).mean(dim=(1, 2))
-            utility_i = -(grad_i.detach().float() * infrared.detach().float()).mean(dim=(1, 2))
-            utilities = torch.stack([utility_v, utility_i], dim=-1)
-            utilities = torch.where(torch.isfinite(utilities), utilities, torch.zeros_like(utilities))
-            utilities = utilities - utilities.mean(dim=-1, keepdim=True)
-            utilities = utilities / utilities.std(dim=-1, keepdim=True).clamp_min(1e-3)
-            utilities = utilities.clamp(-3.0, 3.0)
-            target = F.softmax(utilities / temperature, dim=-1)
-            route_mean = route.mean(dim=1).clamp_min(1e-6)
-            route_mean = route_mean / route_mean.sum(dim=-1, keepdim=True)
-            per_sample = F.kl_div(route_mean.log(), target, reduction='none').sum(dim=-1)
-            hard_float = hard.to(device=per_sample.device, dtype=per_sample.dtype)
-            losses.append((per_sample * hard_float).sum() / hard_float.sum().clamp_min(1.0))
-            route_entropies.append((-(route_mean * route_mean.log()).sum(dim=-1)).mean())
-            valid += 1
-        if not losses:
-            return tracking_loss.new_zeros(()), {'TCMR/available': 0.0, 'TCMR/hard_fraction': float(hard.float().mean().item())}
-        raw = torch.stack(losses).mean()
-        route_loss = float(getattr(settings, 'UTILITY_LAMBDA', 0.005)) * raw
-        return route_loss, {
-            'Loss/tcmr_route': route_loss.detach().item(),
-            'TCMR/Lroute_raw': raw.detach().item(),
-            'TCMR/available': float(valid),
-            'TCMR/hard_fraction': float(hard.float().mean().item()),
-            'TCMR/route_entropy': torch.stack(route_entropies).mean().detach().item(),
-        }
 
     def _compute_tsms_utility_loss(self, tracking_loss, iou, num_queries, device):
         """Rank attention by first-order tracking utility on difficult samples.

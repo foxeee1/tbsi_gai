@@ -4,7 +4,6 @@ Supports degradation-aware modulation at the per-layer level.
 """
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from lib.models.layers.attn_blocks import CASTBlock
 
 
@@ -62,41 +61,12 @@ class DegradationModulator(nn.Module):
         return conf_v, conf_i
 
 
-class TCMRRouter(nn.Module):
-    """Lightweight per-token RGB/TIR medium router."""
-    def __init__(self, dim, reduction=8):
-        super().__init__()
-        hidden = max(dim // reduction, 32)
-        self.route = nn.Sequential(
-            nn.Linear(dim * 4, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, 2),
-        )
-        nn.init.zeros_(self.route[-1].weight)
-        nn.init.zeros_(self.route[-1].bias)
-
-    def forward(self, visible, infrared):
-        features = torch.cat([visible, infrared,
-                              (visible - infrared).abs(),
-                              visible * infrared], dim=-1)
-        # Bound the train-time route logits so utility noise cannot immediately
-        # saturate the modality gate before the tracking teacher stabilizes.
-        logits = self.route(features).clamp(-2.0, 2.0)
-        weights = F.softmax(logits, dim=-1)
-        fused = (weights[..., 0:1] * visible +
-                 weights[..., 1:2] * infrared)
-        return fused, weights
-
-
 class TBSILayer(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, use_degradation=False,
                  use_attn_gate=False, use_temporal_tokens=False,
                  use_smsa=False, use_smsa_rgb=None, use_smsa_tir=None,
-                 smsa_alpha=1.3, smsa_fp32=True,
-                 use_ctvm=False, ctvm_use_smsa_support=True, ctvm_gamma_init=0.01,
-                 ctvm_detach_input=True, ctvm_relation_mode='global',
-                 use_tcmr=False, tcmr_mix_strength=0.10):
+                 smsa_alpha=1.3, smsa_fp32=True):
         super().__init__()
 
         self.t_fusion = nn.Sequential(
@@ -111,9 +81,7 @@ class TBSILayer(nn.Module):
             use_attn_gate=use_attn_gate,
             use_smsa=use_smsa if use_smsa_tir is None else use_smsa_tir,
             smsa_alpha=smsa_alpha,
-            smsa_fp32=smsa_fp32, use_ctvm=use_ctvm,
-            ctvm_use_smsa_support=ctvm_use_smsa_support, ctvm_gamma_init=ctvm_gamma_init,
-            ctvm_detach_input=ctvm_detach_input, ctvm_relation_mode=ctvm_relation_mode
+            smsa_fp32=smsa_fp32
         )
         self.ca_t2s_f2i = CASTBlock(
             dim=dim, num_heads=num_heads, mode='t2s', mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop,
@@ -126,9 +94,7 @@ class TBSILayer(nn.Module):
             use_attn_gate=use_attn_gate,
             use_smsa=use_smsa if use_smsa_rgb is None else use_smsa_rgb,
             smsa_alpha=smsa_alpha,
-            smsa_fp32=smsa_fp32, use_ctvm=use_ctvm,
-            ctvm_use_smsa_support=ctvm_use_smsa_support, ctvm_gamma_init=ctvm_gamma_init,
-            ctvm_detach_input=ctvm_detach_input, ctvm_relation_mode=ctvm_relation_mode
+            smsa_fp32=smsa_fp32
         )
         self.ca_t2s_f2v = CASTBlock(
             dim=dim, num_heads=num_heads, mode='t2s', mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop,
@@ -147,10 +113,6 @@ class TBSILayer(nn.Module):
         )
 
         self.use_degradation = use_degradation
-        self.use_tcmr = use_tcmr
-        self.tcmr_mix_strength = float(tcmr_mix_strength)
-        self.tcmr = TCMRRouter(dim) if use_tcmr else None
-        self.last_tcmr_state = None
         if use_degradation:
             # Only enable temporal context in DM when temporal tokens are actually running
             temporal_dim = dim if use_temporal_tokens else None
@@ -188,16 +150,6 @@ class TBSILayer(nn.Module):
         temp_x_i = self.ca_t2s_f2i(torch.cat([fused_t, x_i[:, lens_z:, :]], dim=1),
                                    quality_mask=qm_i if self.use_degradation else None)[:, lens_z:, :]
 
-        if self.tcmr is not None:
-            candidate_v, candidate_i = temp_x_v, temp_x_i
-            routed_medium, route_weights = self.tcmr(candidate_v, candidate_i)
-            self.last_tcmr_state = (temp_x_v, temp_x_i, route_weights)
-            mix = self.tcmr_mix_strength
-            temp_x_v = candidate_v + mix * route_weights[..., 1:2] * (routed_medium - candidate_v)
-            temp_x_i = candidate_i + mix * route_weights[..., 0:1] * (routed_medium - candidate_i)
-        else:
-            self.last_tcmr_state = None
-
         # Apply degradation-aware gating if enabled (实验1)
         if self.use_degradation:
             x_v = torch.cat([x_v[:, :lens_z, :], temp_x_v * (1 - conf_v) + x_v[:, lens_z:, :] * conf_v], dim=1)
@@ -212,23 +164,10 @@ class TBSILayer(nn.Module):
 
         return x_v, x_i
 
-    def get_tcmr_state(self):
-        return self.last_tcmr_state
-
     def get_smsa_stats(self):
         stats = []
         for block in (self.ca_s2t_i2f, self.ca_s2t_v2f):
             value = getattr(block.attn_reshape, 'smsa_stats', None)
-            if value is not None:
-                stats.append(value)
-        if not stats:
-            return None
-        return {key: sum(item[key] for item in stats) / len(stats) for key in stats[0]}
-
-    def get_ctvm_stats(self):
-        stats = []
-        for block in (self.ca_s2t_i2f, self.ca_s2t_v2f):
-            value = getattr(block.attn_reshape, 'ctvm_stats', None)
             if value is not None:
                 stats.append(value)
         if not stats:

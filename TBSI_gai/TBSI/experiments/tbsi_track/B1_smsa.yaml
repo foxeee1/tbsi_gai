@@ -1,4 +1,3 @@
-# GENERATED RPP-v1 CONFIG; source=experiments/tbsi_track/v1.0.9-smsa-ctvm-full-15ep.yaml
 # ============================================================================
 # 可复现实验锚点：TBSI 单卡 3090 / 48 GiB / 等效 Global Batch 128
 # ============================================================================
@@ -106,13 +105,13 @@ DATA:
     SIZE: 128
   TRAIN:
     DATASETS_NAME:
-      - RPP_LasHeR_train
+      - LasHeR_train
     DATASETS_RATIO:
       - 1
-    SAMPLE_PER_EPOCH: 10783
+    SAMPLE_PER_EPOCH: 59904
   VAL:
     DATASETS_NAME:
-      - rpp_lasher_test
+      - LasHeR_test
     DATASETS_RATIO:
       - 1
     SAMPLE_PER_EPOCH: 10000
@@ -124,11 +123,8 @@ MODEL:
   RIMA:
     ENABLE: True
     SMSA_ENABLE: True
-    CTVM_ENABLE: True
-    CTVM_USE_SMSA_SUPPORT: True
-    CTVM_GAMMA_INIT: 0.01
-    CTVM_DETACH_INPUT: False
-    CTVM_RELATION_MODE: per_head
+    SMSA_RGB_ENABLE: True
+    SMSA_TIR_ENABLE: True
     ENTMAX_ALPHA: 1.3
     FP32_CORE: True
     LOG_STATS: True

@@ -1,5 +1,0 @@
-config	baseline_auc	auc	delta	status
-v6.0.1-rtm-only-fixed	55.46	NA	NA	invalid_no_grad_search_number_1
-v6.1.1-rtm-aligned-local-fixed	55.46	55.17	-0.29	done
-v7.0.1-egir-only-fixed	55.46	54.44	-1.02	done
-v7.1.2-rsm-v2-imbalance-fixed	55.46	54.57	-0.89	done

@@ -118,10 +118,7 @@ class VisionTransformerTBSI(BaseBackbone):
                  tbsi_loc=None, tbsi_drop_path=None,
                  da_in_layer=False, use_attn_gate=False,
                  use_checkpoint=False, use_smsa=False, use_smsa_rgb=None, use_smsa_tir=None,
-                 smsa_alpha=1.3, smsa_fp32=True,
-                 use_ctvm=False, ctvm_use_smsa_support=True, ctvm_gamma_init=0.01,
-                 ctvm_detach_input=True, ctvm_relation_mode='global',
-                 use_tcmr=False, tcmr_mix_strength=0.10):
+                 smsa_alpha=1.3, smsa_fp32=True):
         """
         Args:
             img_size (int, tuple): input image size
@@ -180,13 +177,7 @@ class VisionTransformerTBSI(BaseBackbone):
                     drop_path=self.tbsi_drop_path[i], norm_layer=norm_layer, act_layer=act_layer,
                     use_degradation=da_in_layer, use_attn_gate=use_attn_gate,
                     use_smsa=use_smsa, use_smsa_rgb=use_smsa_rgb, use_smsa_tir=use_smsa_tir,
-                    smsa_alpha=smsa_alpha, smsa_fp32=smsa_fp32,
-                    use_ctvm=use_ctvm, ctvm_use_smsa_support=ctvm_use_smsa_support,
-                    ctvm_gamma_init=ctvm_gamma_init,
-                    ctvm_detach_input=ctvm_detach_input,
-                    ctvm_relation_mode=ctvm_relation_mode,
-                    use_tcmr=use_tcmr,
-                    tcmr_mix_strength=tcmr_mix_strength))
+                    smsa_alpha=smsa_alpha, smsa_fp32=smsa_fp32))
 
         self.init_weights(weight_init)
 
@@ -244,17 +235,6 @@ class VisionTransformerTBSI(BaseBackbone):
         if not values:
             return None
         return {key: sum(value[key] for value in values) / len(values) for key in values[0]}
-
-    def get_ctvm_stats(self):
-        values = [layer.get_ctvm_stats() for layer in self.tbsi_layers]
-        values = [value for value in values if value is not None]
-        if not values:
-            return None
-        return {key: sum(value[key] for value in values) / len(values) for key in values[0]}
-
-    def get_tcmr_state(self):
-        return [layer.get_tcmr_state() for layer in self.tbsi_layers
-                if layer.get_tcmr_state() is not None]
 
     def get_tsms_attention(self):
         """Return training-graph SMSA attentions with their TBSI locations.

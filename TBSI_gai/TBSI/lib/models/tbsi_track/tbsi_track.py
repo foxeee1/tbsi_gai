@@ -372,13 +372,6 @@ def build_tbsi_track(cfg, training=True):
                                             use_smsa_tir=getattr(cfg.MODEL.RIMA, 'SMSA_TIR_ENABLE', smsa_enabled),
                                             smsa_alpha=getattr(cfg.MODEL.RIMA, 'ENTMAX_ALPHA', 1.3),
                                             smsa_fp32=getattr(cfg.MODEL.RIMA, 'FP32_CORE', True),
-                                            use_ctvm=getattr(cfg.MODEL.RIMA, 'ENABLE', False) and getattr(cfg.MODEL.RIMA, 'CTVM_ENABLE', False),
-                                            ctvm_use_smsa_support=getattr(cfg.MODEL.RIMA, 'CTVM_USE_SMSA_SUPPORT', True),
-                                            ctvm_gamma_init=getattr(cfg.MODEL.RIMA, 'CTVM_GAMMA_INIT', 0.01),
-                                            ctvm_detach_input=getattr(cfg.MODEL.RIMA, 'CTVM_DETACH_INPUT', True),
-                                            ctvm_relation_mode=getattr(cfg.MODEL.RIMA, 'CTVM_RELATION_MODE', 'global'),
-                                            use_tcmr=getattr(getattr(cfg.MODEL, 'TCMR', None), 'ENABLE', False),
-                                            tcmr_mix_strength=getattr(getattr(cfg.MODEL, 'TCMR', None), 'MIX_STRENGTH', 0.10),
                                             use_checkpoint=use_checkpoint)
     else:
         raise NotImplementedError

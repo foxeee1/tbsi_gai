@@ -207,9 +207,7 @@ class Attention_talking_head(nn.Module):
 class Attention_st(nn.Module):
     def __init__(self, dim, mode, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.,
                  rpe=False, z_size=7, x_size=14, use_smsa=False,
-                 smsa_alpha=1.3, smsa_fp32=True, use_ctvm=False,
-                 ctvm_use_smsa_support=True, ctvm_gamma_init=0.01,
-                 ctvm_detach_input=True, ctvm_relation_mode='global'):
+                 smsa_alpha=1.3, smsa_fp32=True):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -222,18 +220,7 @@ class Attention_st(nn.Module):
         self.use_smsa = bool(use_smsa and mode == 's2t')
         self.smsa_alpha = float(smsa_alpha)
         self.smsa_fp32 = bool(smsa_fp32)
-        self.use_ctvm = bool(use_ctvm and mode == 's2t')
-        self.ctvm_use_smsa_support = bool(ctvm_use_smsa_support)
-        self.ctvm_detach_input = bool(ctvm_detach_input)
-        self.ctvm_relation_mode = str(ctvm_relation_mode).lower()
-        if self.ctvm_relation_mode not in ('global', 'per_head'):
-            raise ValueError('Unsupported CTVM relation mode: %s' % self.ctvm_relation_mode)
         self.smsa_stats = None
-        self.ctvm_stats = None
-        self.last_ctvm_update = None
-        self.last_ctvm_value = None
-        self.last_ctvm_relation = None
-        self.ctvm_force_uniform = False
         # Optional inference-only diagnostic capture. It is enabled only by
         # TBSI_ATTR_STATS=1 and does not alter the forward values.
         self.last_smsa_attention = None
@@ -241,9 +228,6 @@ class Attention_st(nn.Module):
         # Training-only TSMS capture. Unlike last_smsa_attention this keeps
         # the autograd graph alive until the actor has formed L_cov.
         self.last_smsa_attention_for_loss = None
-        if self.use_ctvm:
-            self.ctvm_norm = nn.LayerNorm(dim)
-            self.ctvm_gamma = nn.Parameter(torch.tensor(float(ctvm_gamma_init)))
         self.rpe =rpe
         if self.rpe:
             relative_position_index = \
@@ -334,73 +318,9 @@ class Attention_st(nn.Module):
         else:
             self.last_smsa_attention_for_loss = None
 
-        v_for_aggregation = v
-        if self.use_ctvm:
-            # The support is detached so the channel branch cannot reshape
-            # the token support through its own gradient path.
-            if self.ctvm_use_smsa_support and self.use_smsa:
-                support = attn.detach().float().mean(dim=1)
-            else:
-                support = torch.full((B, lens_x), 1.0 / lens_x,
-                                     device=attn.device, dtype=torch.float32)
-            # Attention_st's native implementation keeps values as [B, N, C]
-            # rather than materializing an explicit head dimension. Keep CTVM
-            # in that same representation to preserve baseline semantics.
-            # Keep the complete channel-relation branch in FP32 under AMP.
-            # The relation is CxC and its backward matmuls are the sensitive
-            # part; only the residual is cast back to the native value dtype.
-            with torch.cuda.amp.autocast(enabled=False):
-                value_tokens = self.ctvm_norm(v.float())
-                # Model-side backward stabilization: the channel statistic is
-                # used as a feature-conditioned residual, but its high-order
-                # CxC path is not allowed to backpropagate through the shared
-                # value stream. gamma remains learnable, while the forward
-                # CTVM mechanism is unchanged.
-                if self.ctvm_detach_input:
-                    value_tokens = value_tokens.detach()
-                # Parameter-free MVP: use the normalized value channels
-                # directly as Qc/Kc/Vc. This preserves the mechanism under
-                # test while avoiding randomly initialized channel projectors.
-                vc = value_tokens
-                if self.ctvm_relation_mode == 'per_head':
-                    head_dim = C // self.num_heads
-                    z = value_tokens.reshape(B, lens_x, self.num_heads, head_dim)
-                    weighted_k = z * support[:, :, None, None]
-                    relation = torch.einsum('bnhd,bnhg->bhdg', z, weighted_k)
-                    relation = relation / max(float(head_dim) ** 0.5, 1.0)
-                    relation = relation.softmax(dim=-1)
-                    ctv_update = torch.einsum('bnhd,bhdg->bnhg', z, relation).reshape(B, lens_x, C)
-                else:
-                    qc = value_tokens
-                    kc = value_tokens
-                    weighted_k = kc * support[:, :, None]
-                    relation = torch.matmul(qc.transpose(-2, -1), weighted_k) / max(float(C) ** 0.5, 1.0)
-                    relation = relation.softmax(dim=-1)
-                    ctv_update = torch.matmul(vc, relation)
-                if self.ctvm_force_uniform:
-                    relation = torch.full_like(relation, 1.0 / relation.shape[-1])
-                    if self.ctvm_relation_mode == 'per_head':
-                        z = value_tokens.reshape(B, lens_x, self.num_heads, C // self.num_heads)
-                        ctv_update = torch.einsum('bnhd,bhdg->bnhg', z, relation).reshape(B, lens_x, C)
-                    else:
-                        ctv_update = torch.matmul(value_tokens, relation)
-                ctv_update = self.ctvm_gamma.float() * ctv_update
-                self.last_ctvm_update = ctv_update.detach()
-                self.last_ctvm_value = v.detach().float()
-                self.last_ctvm_relation = relation.detach()
-            v_for_aggregation = v + ctv_update.to(v.dtype)
-            with torch.no_grad():
-                relation_p = relation.float().clamp_min(torch.finfo(torch.float32).tiny)
-                self.ctvm_stats = {
-                    'gamma': self.ctvm_gamma.detach().float().item(),
-                    'relation_entropy': float(-(relation_p * relation_p.log()).sum(dim=-1).mean().item()),
-                    'support_entropy': float(-(support.clamp_min(1e-12) * support.clamp_min(1e-12).log()).sum(dim=-1).mean().item()),
-                    'nan_inf': float((~torch.isfinite(v_for_aggregation)).any().item()),
-                }
-
         attn = self.attn_drop(attn)
 
-        x = attn @ v_for_aggregation  # B, lens_z/x, C
+        x = attn @ v  # B, lens_z/x, C
         x = x.transpose(1, 2)  # B, C, lens_z/x
         x = x.reshape(B, -1, C)  # B, lens_z/x, C; NOTE: Rearrange channels, marginal improvement
         x = self.proj(x)
