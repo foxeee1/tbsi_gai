@@ -240,7 +240,7 @@ class TBSITrack(nn.Module):
             prev_tokens: (B, K*2, D) or None — previous temporal tokens
         """
         # Two-pass: update token state with prev frame, then process current
-        if self.training and self.use_temporal_tokens and prev_search is not None:
+        if self.use_temporal_tokens and prev_search is not None:
             with torch.no_grad():
                 x_prev, _ = self.backbone(z=template, x=prev_search,
                                            ce_template_mask=ce_template_mask,
@@ -345,6 +345,8 @@ class TBSITrack(nn.Module):
                    'score_map': score_map_ctr,
                    'size_map': size_map,
                    'offset_map': offset_map}
+            if self.use_temporal_tokens:
+                out['temporal_tokens'] = tok_out
             return out
         else:
             raise NotImplementedError
@@ -372,7 +374,8 @@ def build_tbsi_track(cfg, training=True):
                                             use_smsa_tir=getattr(cfg.MODEL.RIMA, 'SMSA_TIR_ENABLE', smsa_enabled),
                                             smsa_alpha=getattr(cfg.MODEL.RIMA, 'ENTMAX_ALPHA', 1.3),
                                             smsa_fp32=getattr(cfg.MODEL.RIMA, 'FP32_CORE', True),
-                                            use_checkpoint=use_checkpoint)
+                                            use_checkpoint=use_checkpoint,
+                                            fusion_mode=getattr(cfg.MODEL.BACKBONE, 'TBSI_FUSION', 'legacy'))
     else:
         raise NotImplementedError
 

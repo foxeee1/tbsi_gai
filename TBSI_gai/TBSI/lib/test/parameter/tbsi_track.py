@@ -27,7 +27,10 @@ def parameters(yaml_name: str):
                             (yaml_name, cfg.TEST.EPOCH))
     old_ckpt = os.path.join(save_dir, "checkpoints/train/tbsi_track/%s/TBSITrack_ep%04d.pth.tar" %
                             (yaml_name, cfg.TEST.EPOCH))
-    if os.path.exists(new_ckpt):
+    override_ckpt = os.environ.get('TBSI_CHECKPOINT_OVERRIDE', '')
+    if override_ckpt:
+        params.checkpoint = override_ckpt
+    elif os.path.exists(new_ckpt):
         params.checkpoint = new_ckpt
     else:
         params.checkpoint = old_ckpt

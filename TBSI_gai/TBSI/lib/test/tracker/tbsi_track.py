@@ -67,6 +67,16 @@ class TBSITrack(BaseTracker):
         self.z_patch_arr = z_patch_arr
         template = self.preprocessor.process(z_patch_arr, z_amask_arr, half=self.use_fp16)
         self.z_dict1 = template
+        # Oracle template-token mask for C1 compatibility analysis.
+        crop_side = float(self.params.template_size) / float(resize_factor)
+        init = [float(v) for v in info['init_bbox']]
+        cx, cy = init[0] + init[2] / 2.0, init[1] + init[3] / 2.0
+        x0, y0 = cx - crop_side / 2.0, cy - crop_side / 2.0
+        bx, by = (init[0] - x0) * resize_factor, (init[1] - y0) * resize_factor
+        bw, bh = init[2] * resize_factor, init[3] * resize_factor
+        yy, xx = torch.meshgrid(torch.arange(8), torch.arange(8))
+        self.c1_template_mask = ((xx.flatten() + 0.5) * 16.0 >= bx) & ((xx.flatten() + 0.5) * 16.0 <= bx + bw)
+        self.c1_template_mask &= ((yy.flatten() + 0.5) * 16.0 >= by) & ((yy.flatten() + 0.5) * 16.0 <= by + bh)
 
         self.box_mask_z = None
         if self.cfg.MODEL.BACKBONE.CE_LOC:
@@ -80,6 +90,8 @@ class TBSITrack(BaseTracker):
         # Reset temporal tokens for new sequence (Section 3.1)
         if hasattr(self.network, 'reset_temporal_tokens'):
             self.network.reset_temporal_tokens()
+        self.prev_search = None
+        self.prev_temporal_tokens = None
         if self.save_all_boxes:
             all_boxes_save = info['init_bbox'] * self.cfg.MODEL.NUM_OBJECT_QUERIES
             return {"all_boxes": all_boxes_save}
@@ -99,7 +111,14 @@ class TBSITrack(BaseTracker):
         out_dict = self.network.forward(
             template=[self.z_dict1.tensors[:,:3,:,:],self.z_dict1.tensors[:,3:,:,:]],
             search=[x_dict.tensors[:,:3,:,:], x_dict.tensors[:,3:,:,:]],
+            prev_search=self.prev_search,
+            prev_tokens=self.prev_temporal_tokens,
             ce_template_mask=self.box_mask_z)
+
+        if getattr(self.cfg.MODEL, 'TEMPORAL_TOKENS', False):
+            self.prev_search = [x_dict.tensors[:,:3,:,:].detach(),
+                                x_dict.tensors[:,3:,:,:].detach()]
+            self.prev_temporal_tokens = out_dict.get('temporal_tokens')
 
         if self.attr_stats_path and os.environ.get('TBSI_ATTR_STATS', '0') == '1' and info is not None:
             self._record_smsa_support_stats(
@@ -200,6 +219,215 @@ class TBSITrack(BaseTracker):
                     'GTRecall': gt_recall,
                     'BGMass': 1.0 - gt_mass,
                 })
+        if rows:
+            with open(self.attr_stats_path, 'a') as f:
+                for row in rows:
+                    f.write(json.dumps(row) + '\n')
+
+    def _record_fusion_diagnostics(self, sequence_name, frame_num):
+        """Write V2 attention directionality and redundancy diagnostics."""
+        if os.environ.get('TBSI_FUSION_DIAGNOSTICS', '0') != '1':
+            return
+        layer_ids = getattr(self.cfg.MODEL.BACKBONE, 'TBSI_LOC', [3, 6, 9])
+        rows = []
+        for layer_id, layer in zip(layer_ids, self.network.backbone.tbsi_layers):
+            fusion = getattr(layer, 'v2_template_fusion', None)
+            stats = getattr(fusion, 'last_fusion_stats', None)
+            if stats is None:
+                continue
+            row = {'sequence': sequence_name, 'frame': int(frame_num),
+                   'layer': int(layer_id)}
+            for key, value in stats.items():
+                # Snapshot metadata may be categorical (e.g. fusion_pattern);
+                # keep it intact while normalizing tensor/scalar metrics.
+                if isinstance(value, str):
+                    row[key] = value
+                else:
+                    row[key] = float(value)
+            rows.append(row)
+        if rows:
+            with open(self.attr_stats_path, 'a') as f:
+                for row in rows:
+                    f.write(json.dumps(row) + '\n')
+
+    def _record_c1_pair_diagnostics(self, sequence_name, frame_num):
+        """Summarize oracle target-pair purity and compatibility for C1."""
+        if os.environ.get('TBSI_FUSION_PAIR_STATS', '0') != '1' or not self.attr_stats_path:
+            return
+        mask = self.c1_template_mask
+        coords = torch.stack(torch.meshgrid(torch.arange(8), torch.arange(8)), dim=-1).reshape(-1, 2).float()
+        dist = ((coords[:, None] - coords[None, :]) ** 2).sum(-1).sqrt()
+        target_pair = mask[:, None] & mask[None, :]
+        rows = []
+        active = set(getattr(self.cfg.MODEL.BACKBONE, 'TBSI_FUSION_ACTIVE', []) or
+                     getattr(self.cfg.MODEL.BACKBONE, 'TBSI_LOC', [3, 6, 9]))
+        for layer_id, layer in zip(getattr(self.cfg.MODEL.BACKBONE, 'TBSI_LOC', [3, 6, 9]),
+                                   self.network.backbone.tbsi_layers):
+            if layer_id not in active:
+                continue
+            fusion = getattr(layer, 'v2_template_fusion', None)
+            attn = getattr(fusion, 'last_pair_attention', None)
+            q = getattr(fusion, 'last_pair_q', None)
+            k = getattr(fusion, 'last_pair_k', None)
+            if attn is None or q is None or k is None:
+                continue
+            for direction, block, q_slice, k_slice in (
+                    ('RGB2TIR', attn[:, :, :64, 64:128], q[:, :, :64], k[:, :, 64:128]),
+                    ('TIR2RGB', attn[:, :, 64:128, :64], q[:, :, 64:128], k[:, :, :64])):
+                weights = block[0].mean(0)
+                q_mean = q_slice[0].mean(0)
+                k_mean = k_slice[0].mean(0)
+                sims = torch.nn.functional.normalize(q_mean, dim=-1) @ torch.nn.functional.normalize(k_mean, dim=-1).transpose(0, 1)
+                topn = max(1, min(10, weights.numel()))
+                top_idx = weights.flatten().topk(topn).indices
+                target_flat = target_pair.flatten()
+                rows.append({'sequence': sequence_name, 'frame': int(frame_num), 'layer': int(layer_id),
+                             'direction': direction, 'target_pair_mass': float(weights[target_pair].sum()),
+                             'cross_mass': float(weights.sum()),
+                             'target_pair_purity': float(weights[target_pair].sum() / weights.sum().clamp_min(1e-12)),
+                             'top10_target_purity': float(target_flat[top_idx].float().mean()),
+                             'target_distance': float(dist[target_pair].mean()) if target_pair.any() else 0.0,
+                             'target_similarity': float(sims[target_pair].mean()) if target_pair.any() else 0.0,
+                             'non_target_similarity': float(sims[~target_pair].mean()) if (~target_pair).any() else 0.0})
+        if rows:
+            with open(self.attr_stats_path, 'a') as f:
+                for row in rows:
+                    f.write(json.dumps(row) + '\n')
+
+    def _record_token_gain_diagnostics(self, sequence_name, frame_num):
+        """Record token-wise fusion gain for the routing hypothesis."""
+        if os.environ.get('TBSI_FUSION_GAIN_STATS', '0') != '1' or not self.attr_stats_path:
+            return
+        mask = self.c1_template_mask
+        rows = []
+        for layer_id, layer in zip(getattr(self.cfg.MODEL.BACKBONE, 'TBSI_LOC', [3, 6, 9]),
+                                   self.network.backbone.tbsi_layers):
+            fusion = getattr(layer, 'v2_template_fusion', None)
+            gain = getattr(fusion, 'last_token_gain', None)
+            if gain is None:
+                continue
+            gain = gain[0]
+            for modality, values in (('RGB', gain[:64]), ('TIR', gain[64:128])):
+                for region, selected in (('target', mask), ('background', ~mask)):
+                    if selected.any():
+                        vals = values[selected]
+                        rows.append({'sequence': sequence_name, 'frame': int(frame_num),
+                                     'layer': int(layer_id), 'modality': modality,
+                                     'region': region, 'count': int(vals.numel()),
+                                     'gain_mean': float(vals.mean()),
+                                     'gain_median': float(vals.median()),
+                                     'gain_p90': float(torch.quantile(vals, 0.90)),
+                                     'gain_max': float(vals.max())})
+        if rows:
+            with open(self.attr_stats_path, 'a') as f:
+                for row in rows:
+                    f.write(json.dumps(row) + '\n')
+
+    def _record_correspondence_diagnostics(self, sequence_name, frame_num):
+        """Compare independent cosine and Sinkhorn token correspondences."""
+        if os.environ.get('TBSI_CORRESPONDENCE_STATS', '0') != '1' or not self.attr_stats_path:
+            return
+        mask = self.c1_template_mask
+        coords = torch.stack(torch.meshgrid(torch.arange(8), torch.arange(8)), dim=-1).reshape(-1, 2).float()
+        distance = ((coords[:, None] - coords[None, :]) ** 2).sum(-1).sqrt()
+        target_pair = mask[:, None] & mask[None, :]
+
+        def sinkhorn(log_scores, iterations=30):
+            # Uniform 64x64 marginals; log-domain updates are stable in FP32.
+            log_p = log_scores.float()
+            log_marginal = -torch.log(torch.tensor(float(log_p.shape[-1])))
+            for _ in range(iterations):
+                log_p = log_p - torch.logsumexp(log_p, dim=-1, keepdim=True) + log_marginal
+                log_p = log_p - torch.logsumexp(log_p, dim=-2, keepdim=True) + log_marginal
+            return log_p.exp()
+
+        rows = []
+        for layer_id, layer in zip(getattr(self.cfg.MODEL.BACKBONE, 'TBSI_LOC', [3, 6, 9]),
+                                   self.network.backbone.tbsi_layers):
+            fusion = getattr(layer, 'v2_template_fusion', None)
+            tokens = getattr(fusion, 'last_template_tokens', None)
+            if tokens is None:
+                continue
+            rgb, tir = tokens
+            similarity = torch.nn.functional.normalize(rgb[0], dim=-1) @ torch.nn.functional.normalize(tir[0], dim=-1).t()
+            for direction, scores in (('RGB2TIR', similarity), ('TIR2RGB', similarity.t())):
+                pair_mask = target_pair if direction == 'RGB2TIR' else target_pair.t()
+                dist = distance if direction == 'RGB2TIR' else distance.t()
+                cosine_prob = scores.softmax(dim=-1)
+                ot_prob = sinkhorn(scores / 0.07)
+                for method, prob in (('cosine', cosine_prob), ('sinkhorn', ot_prob)):
+                    top1 = prob.argmax(dim=-1)
+                    top5 = prob.topk(5, dim=-1).indices
+                    top10 = prob.topk(10, dim=-1).indices
+                    row_ids = torch.arange(prob.shape[0])
+                    top1_target = pair_mask[row_ids, top1]
+                    top5_target = pair_mask[row_ids[:, None], top5].any(dim=-1)
+                    top10_target = pair_mask[row_ids[:, None], top10].any(dim=-1)
+                    target_rows = mask
+                    bg_rows = ~mask
+                    false_target_to_bg = (~pair_mask[target_rows, :].gather(1, top1[target_rows, None]).squeeze(1)).float().mean()
+                    rows.append({'sequence': sequence_name, 'frame': int(frame_num), 'layer': int(layer_id),
+                                 'direction': direction, 'method': method,
+                                 'match_precision': float(top1_target.float().mean()),
+                                 'target_top5_recall': float(top5_target[target_rows].float().mean()),
+                                 'target_top10_recall': float(top10_target[target_rows].float().mean()),
+                                 'target_to_background_false_rate': float(false_target_to_bg),
+                                 'mean_match_distance': float(dist[row_ids, top1].mean()),
+                                 'target_match_distance': float(dist[target_rows][top1_target[target_rows]].mean()) if top1_target[target_rows].any() else 0.0})
+        if rows:
+            with open(self.attr_stats_path, 'a') as f:
+                for row in rows:
+                    f.write(json.dumps(row) + '\n')
+
+    def _record_complement_diagnostics(self, sequence_name, frame_num):
+        """Measure whether joint-fusion residuals align with the other modality."""
+        if os.environ.get('TBSI_COMPLEMENT_STATS', '0') != '1' or not self.attr_stats_path:
+            return
+        mask = self.c1_template_mask
+        rows = []
+        for layer_id, layer in zip(getattr(self.cfg.MODEL.BACKBONE, 'TBSI_LOC', [3, 6, 9]),
+                                   self.network.backbone.tbsi_layers):
+            fusion = getattr(layer, 'v2_template_fusion', None)
+            before = getattr(fusion, 'last_complement_before', None)
+            after = getattr(fusion, 'last_complement_after', None)
+            if before is None or after is None:
+                continue
+            before = before[0]
+            after = after[0]
+            rgb, tir = before[:64], before[64:128]
+            fused_rgb, fused_tir = after[:64], after[64:128]
+            for direction, target, source, fused in (
+                    ('TIR2RGB', rgb, tir, fused_rgb),
+                    ('RGB2TIR', tir, rgb, fused_tir)):
+                residual = fused - target
+                residual_norm = residual.norm(dim=-1)
+                residual_unit = torch.nn.functional.normalize(residual, dim=-1)
+                target_unit = torch.nn.functional.normalize(target, dim=-1)
+                source_unit = torch.nn.functional.normalize(source, dim=-1)
+                source_cos = (residual_unit * source_unit).sum(-1)
+                target_cos = (residual_unit * target_unit).sum(-1)
+                rgb_preservation = (torch.nn.functional.normalize(rgb, dim=-1) *
+                                    torch.nn.functional.normalize(fused_rgb, dim=-1)).sum(-1)
+                tir_preservation = (torch.nn.functional.normalize(tir, dim=-1) *
+                                    torch.nn.functional.normalize(fused_tir, dim=-1)).sum(-1)
+                fused_rgb_unit = torch.nn.functional.normalize(fused_rgb, dim=-1)
+                fused_tir_unit = torch.nn.functional.normalize(fused_tir, dim=-1)
+                cross_after = (fused_rgb_unit * fused_tir_unit).sum(-1)
+                cross_before = (torch.nn.functional.normalize(rgb, dim=-1) *
+                                torch.nn.functional.normalize(tir, dim=-1)).sum(-1)
+                for region, selected in (('target', mask), ('background', ~mask)):
+                    if selected.any():
+                        rows.append({'sequence': sequence_name, 'frame': int(frame_num),
+                                     'layer': int(layer_id), 'direction': direction,
+                                     'region': region, 'count': int(selected.sum()),
+                                     'residual_norm': float(residual_norm[selected].mean()),
+                                     'source_cosine': float(source_cos[selected].mean()),
+                                     'target_cosine': float(target_cos[selected].mean()),
+                                     'source_minus_target_cosine': float((source_cos[selected] - target_cos[selected]).mean()),
+                                     'rgb_preservation': float(rgb_preservation[selected].mean()),
+                                     'tir_preservation': float(tir_preservation[selected].mean()),
+                                     'cross_modal_before_cosine': float(cross_before[selected].mean()),
+                                     'cross_modal_after_cosine': float(cross_after[selected].mean())})
         if rows:
             with open(self.attr_stats_path, 'a') as f:
                 for row in rows:

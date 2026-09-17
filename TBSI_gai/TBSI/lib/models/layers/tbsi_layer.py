@@ -2,9 +2,42 @@
 TBSILayer: Core cross-attention between RGB and TIR modalities.
 Supports degradation-aware modulation at the per-layer level.
 """
+import os
 import torch
 import torch.nn as nn
 from lib.models.layers.attn_blocks import CASTBlock
+
+
+class V2TemplateFusion(nn.Module):
+    """V2-style joint template MHSA, kept behind an explicit feature gate."""
+
+    def __init__(self, dim, num_heads, qkv_bias=False, drop=0., attn_drop=0.,
+                 norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.norm = norm_layer(dim)
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(drop)
+
+    def forward(self, x_rgb_template, x_tir_template):
+        # The two modality template streams interact jointly, then are split
+        # back so the surrounding ViT and search path remain unchanged.
+        x = torch.cat([x_rgb_template, x_tir_template], dim=1)
+        residual = x
+        x = self.norm(x)
+        bsz, length, dim = x.shape
+        qkv = self.qkv(x).reshape(bsz, length, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        logits = (q @ k.transpose(-2, -1)) * self.scale
+        attn = self.attn_drop(logits.softmax(dim=-1))
+        x = (attn @ v).transpose(1, 2).reshape(bsz, length, dim)
+        x = residual + self.proj_drop(self.proj(x))
+        return x[:, :x_rgb_template.shape[1]], x[:, x_rgb_template.shape[1]:]
 
 
 class DegradationModulator(nn.Module):
@@ -66,7 +99,7 @@ class TBSILayer(nn.Module):
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, use_degradation=False,
                  use_attn_gate=False, use_temporal_tokens=False,
                  use_smsa=False, use_smsa_rgb=None, use_smsa_tir=None,
-                 smsa_alpha=1.3, smsa_fp32=True):
+                 smsa_alpha=1.3, smsa_fp32=True, fusion_mode='legacy'):
         super().__init__()
 
         self.t_fusion = nn.Sequential(
@@ -74,6 +107,11 @@ class TBSILayer(nn.Module):
             nn.LayerNorm(dim),
             nn.GELU()
         )
+        self.fusion_mode = fusion_mode
+        if fusion_mode == 'v2':
+            self.v2_template_fusion = V2TemplateFusion(
+                dim=dim, num_heads=num_heads, qkv_bias=qkv_bias,
+                drop=drop, attn_drop=attn_drop, norm_layer=norm_layer)
 
         self.ca_s2t_v2f = CASTBlock(
             dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop,
@@ -121,6 +159,15 @@ class TBSILayer(nn.Module):
     def forward(self, x_v, x_i, lens_z, temporal_tokens=None):
         # x_v: [B, N, C], N = 320 (64 template + 256 search)
         # x_i: [B, N, C]
+        if self.fusion_mode == 'v2':
+            fused_v, fused_i = self.v2_template_fusion(
+                x_v[:, :lens_z, :], x_i[:, :lens_z, :])
+            x_v = torch.cat([fused_v, x_v[:, lens_z:, :]], dim=1)
+            x_i = torch.cat([fused_i, x_i[:, lens_z:, :]], dim=1)
+            # Continue through the standard TBSI interaction path. V2 changes
+            # only the template initialization; search/template interaction
+            # and its optional SMSA remain active and attributable.
+
         fused_t = torch.cat([x_v[:, :lens_z, :], x_i[:, :lens_z, :]], dim=2)
         fused_t = self.t_fusion(fused_t)  # [B, 64, C]
 

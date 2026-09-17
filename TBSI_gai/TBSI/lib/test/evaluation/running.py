@@ -2,10 +2,13 @@ import numpy as np
 import multiprocessing
 import os
 import sys
+import copy
+import traceback
 from itertools import product
 from collections import OrderedDict
 from lib.test.evaluation import Sequence, Tracker
 import torch
+from tqdm import tqdm
 
 
 def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
@@ -133,13 +136,23 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
 
     print('Tracker: {} {} {} ,  Sequence: {}'.format(tracker.name, tracker.parameter_name, tracker.run_id, seq.name))
   
+    sequence_to_run = seq
+    max_diag_frames = int(os.environ.get('TBSI_DIAGNOSTIC_MAX_FRAMES', '0'))
+    if diagnostic and max_diag_frames > 0 and len(seq.frames[0]) > max_diag_frames:
+        sequence_to_run = copy.copy(seq)
+        sequence_to_run.frames = [frames[:max_diag_frames] for frames in seq.frames]
+        if sequence_to_run.ground_truth_rect is not None:
+            sequence_to_run.ground_truth_rect = sequence_to_run.ground_truth_rect[:max_diag_frames]
+
     if debug:
-        output = tracker.run_sequence(seq, debug=debug, run_id=tracker.run_id, name=tracker.parameter_name)
+        output = tracker.run_sequence(sequence_to_run, debug=debug, run_id=tracker.run_id, name=tracker.parameter_name)
     else:
         try:
-            output = tracker.run_sequence(seq, debug=debug, run_id=tracker.run_id, name=tracker.parameter_name)
+            output = tracker.run_sequence(sequence_to_run, debug=debug, run_id=tracker.run_id, name=tracker.parameter_name)
         except Exception as e:
             print(e)
+            if os.environ.get('TBSI_DEBUG_EXCEPTIONS', '0') == '1':
+                traceback.print_exc()
             return
 
     sys.stdout.flush()
@@ -167,6 +180,9 @@ def run_dataset(dataset, trackers, debug=False, threads=0, num_gpus=8):
     """
     multiprocessing.set_start_method('spawn', force=True)
 
+    max_sequences = int(os.environ.get('TBSI_DIAGNOSTIC_MAX_SEQUENCES', '0'))
+    if max_sequences > 0:
+        dataset = dataset[:max_sequences]
     print('Evaluating {:4d} trackers on {:5d} sequences'.format(len(trackers), len(dataset)))
 
     multiprocessing.set_start_method('spawn', force=True)
@@ -177,7 +193,8 @@ def run_dataset(dataset, trackers, debug=False, threads=0, num_gpus=8):
         mode = 'parallel'
 
     if mode == 'sequential':
-        for seq in dataset:
+        sequence_iter = tqdm(dataset, total=len(dataset), desc='Sequences', unit='seq', dynamic_ncols=True)
+        for seq in sequence_iter:
             for tracker_info in trackers:
                 # import ipdb; ipdb.set_trace()
                 run_sequence(seq, tracker_info, debug=debug)

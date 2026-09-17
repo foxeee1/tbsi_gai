@@ -118,7 +118,7 @@ class VisionTransformerTBSI(BaseBackbone):
                  tbsi_loc=None, tbsi_drop_path=None,
                  da_in_layer=False, use_attn_gate=False,
                  use_checkpoint=False, use_smsa=False, use_smsa_rgb=None, use_smsa_tir=None,
-                 smsa_alpha=1.3, smsa_fp32=True):
+                 smsa_alpha=1.3, smsa_fp32=True, fusion_mode='legacy'):
         """
         Args:
             img_size (int, tuple): input image size
@@ -166,6 +166,7 @@ class VisionTransformerTBSI(BaseBackbone):
 
         # Template-bridged search region interaction (TBSI)
         self.tbsi_loc = tbsi_loc
+        self.tbsi_fusion = fusion_mode
         self.tbsi_drop_path = tbsi_drop_path
         self.tbsi_layers = nn.ModuleList()
         self.da_in_layer = da_in_layer
@@ -177,7 +178,8 @@ class VisionTransformerTBSI(BaseBackbone):
                     drop_path=self.tbsi_drop_path[i], norm_layer=norm_layer, act_layer=act_layer,
                     use_degradation=da_in_layer, use_attn_gate=use_attn_gate,
                     use_smsa=use_smsa, use_smsa_rgb=use_smsa_rgb, use_smsa_tir=use_smsa_tir,
-                    smsa_alpha=smsa_alpha, smsa_fp32=smsa_fp32))
+                    smsa_alpha=smsa_alpha, smsa_fp32=smsa_fp32,
+                    fusion_mode=fusion_mode))
 
         self.init_weights(weight_init)
 

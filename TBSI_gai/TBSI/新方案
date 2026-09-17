@@ -1,0 +1,276 @@
+TBSI RGB-T Tracking：Innovation 2
+APSR-v0 论文实验与创新冻结文档
+Asymmetric Paired-State Retrieval (APSR)
+版本：2026-09-17（实验前终审版）　|　目标：1 个月完成 Go/No-Go、完整验证与投稿证据包　|　状态：Conditional Go / Kill Study Ready
+本文件用于冻结 Innovation 2 的研究问题、核心数学、实验因果链和止损条件。目标不是继续搜索模块，而是在第一周判断 APSR 是否具有真实的可利用 headroom 与跨模态 retrieval-authority 证据；若核心命题不成立，立即停止，并将剩余时间转向 Innovation 1 的论文整理。
+
+实验前终审结论：允许进入实现，但只允许实现本文件定义的 APSR-v0。当前最关键的证据不是 APSR 相对 Static 是否涨点，而是固定外生 memory 时，APSR 是否比尺度归一化后的对称检索获得更低的 counterfactual utility regret。未通过该门槛，不得启动闭环 memory、MQS 或任何外围增强。
+1. 最终研究判断
+结论：保留 APSR，但将其严格定义为“跨模态历史状态检索控制”问题，而不是模板更新、reliability learning 或 memory architecture。
+历史状态覆盖扩大  →  检索存在选择误差  →  RGB/TIR 退化不同步  →  检索控制权应动态不对称  →  另一模态只允许条件验证
+论文真正应押注的命题只有一句：当 RGB 与 TIR 的历史状态检索能力不同步时，由当前证据更强的模态取得 retrieval authority，是否能够比对称历史检索更准确地选择下一步状态？
+第一创新点 B3 V2 Joint Fusion 作为稳定 parent / representation foundation；第二创新点 APSR 承担主要新颖性。APSR 的新意不在 memory、cosine、token matching 或 confidence 单点，而在于“谁有权决定检索哪个历史状态”的跨模态角色不对称。
+项目	冻结结论	论文定位
+RAG / 频域 / Hopfield	不做	避免把方法扩成组件堆叠
+learned reliability / utility calibrator	不做主方法	仅作为 offline oracle 分析，不进入在线模型
+memory bank / paired slots	保留 M=4	基础载体，不宣称创新
+fine-grained matching	保留为检索实现	成熟实现手段，不宣称创新
+asymmetric retrieval authority	核心	Innovation 2 唯一核心机制
+conditional hold / consensus	核心决策约束	保证切换安全，不新增独立模块
+MQS	暂不做	只有 A1/A2 通过后才作为一次 supporting ablation
+
+2. 创新边界：什么是创新，什么只是成熟手段
+必须避免把成熟技术的组合包装成多个创新。论文主张应严格区分“机制创新”和“实现组件”。
+元素	是否创新	正确表述
+Fixed-size paired memory	否	synchronized RGB-T historical state storage
+Cosine / bidirectional token matching	否	retrieval similarity implementation
+Empirical CDF percentile normalization	否	cross-modal score-scale normalization
+Top-1 / Top-2 margin	否	retrieval decisiveness evidence
+Candidate-vs-active benefit	否	switch evidence
+Modality reliability / confidence	否	observable evidence used for retrieval authority
+One modality retrieves, both return	是（核心）	asymmetric retrieval authority over synchronized state
+Counterpart can hold but cannot redirect	是（核心约束）	asymmetric verification privilege
+
+已核验的相关工作已经使“历史 memory”“dynamic template”“modality validity”和“reliability-guided update”高度拥挤：STMTrack/HIPTrack 表明历史信息可用于缓解 appearance variation；TUMFNet 将 modality uncertainty 与 template update/fusion 联系起来；MoETrack 直接讨论何时融合以及 modality switch；BTMTrack 结合 dynamic templates 与 temporal-modal candidate elimination。这些工作已足以支持本文的避撞判断：APSR 不应再声称“提出一种可靠性模板更新”。MPTrack、DTPTrack 和 RAGTrack 当前只作为待一手来源核验的候选近邻，不用于支撑新颖性结论。
+3. 正式问题定义：APSR 是三动作决策，而不是模板更新
+在第 t 帧进入 tracker 时，系统有当前 active state A_t。记 memory 中的同步 RGB-T slot 为 M_t={M_i}_{i=0}^{M-1}，其中 M=4，M_0 为 immutable initial state。每个 slot 同时保存实际模板图像和检索描述。
+M_i = (T_i^R, T_i^T, K_i^R, K_i^T),  i=0,…,M-1
+第 t 帧只进行一次正常 tracking forward。输出包含当前预测框以及可用于检索的、cross-modal-isolated、template-conditioned retrieval features。根据当前帧的证据，最终只决定下一帧的 active state：
+A_{t+1} = π(q_t^R, q_t^T, b̂_t, M_t, A_t)
+真实但在线不可见的 oracle objective 定义为：
+Δ_m = J_{t+1}(i_m) - J_{t+1}(A_t),   m∈{R,T}
+a_t* = argmax{0, Δ_R, Δ_T}
+因此真正的动作空间是 {hold, RGB-retrieval, TIR-retrieval}。APSR 的在线问题不是估计“哪个模态更干净”，而是从 observable retrieval evidence 推断哪个模态更有能力控制历史状态选择。
+4. 因果与一次前向契约
+APSR 必须严格遵守 one-step delayed causal retrieval。当前帧的 retrieval evidence 只能决定下一帧 active state，绝不允许当前帧先检索、再使用该检索结果重新 forward 当前帧。
+A_t  →  frame t forward  →  q_t^R,q_t^T,b̂_t  →  retrieval decision  →  A_{t+1}
+同时必须遵守 retrieve-before-write：先在冻结的 M_t 上完成历史状态选择，再决定是否将当前候选写入 M_{t+1}。否则当前候选会对自身产生 self-retrieval leakage。
+M_t  --retrieve-->  A_{t+1}  --write candidate-->  M_{t+1}
+5. Retrieval descriptor：只隔离“跨模态”，不虚构“纯单模态”
+根据当前 TBSI 实现契约，第一次跨模态 TBSI interaction 之前，RGB 与 TIR 仍已经分别与各自 active template 一起经过同模态 self-attention。因此论文应将该特征准确命名为：
+F_t^m = PreCrossTBSI(X_t^m; T_{A_t}^m),   m∈{R,T}
+即：cross-modal-isolated, template-conditioned retrieval feature。不能写成纯粹的 φ(X_t^m)，因为它已经受到同模态 active template 的条件化。
+
+feature tap 冻结在第一个 TBSI location（当前为 block index 3）完成普通 ViT block 之后、执行该层 TBSI interaction 之前。不得在不同实验中改变 tap 层。实现必须通过 feature gate 返回该中间量；feature gate 关闭时，原始 forward 输出、参数、计算图和结果保持不变。
+在预测框 b̂_t 映射到 search feature map 后，对目标区域进行固定 8×8 ROIAlign，获得当前 query tokens：
+Q_t^m = ROIAlign(F_t^m, b̂_t, 8×8) ∈ R^{64×d}
+这里必须只使用预测目标区域覆盖的 search tokens，不能平均全部 16×16=256 search tokens。否则背景占多数，会直接稀释历史状态匹配。
+ROIAlign 使用 box head 在 search crop 坐标系内输出、尚未 map-back 到原图的归一化预测框；先从 cxcywh 转成 xyxy，再映射到 16×16 feature grid。禁止使用 GT box 构造在线 query。GT box 只允许出现在离线 oracle/counterfactual 标注中。
+写入候选的实际模板仍是当前 RGB/TIR 原图按 b̂_t 裁剪得到的同步 image pair；Q_t^m 只是 retrieval key/descriptor，不声称等于最终模板 feature。
+6. 双向细粒度检索分数
+对于当前 query Q_t^m 与 memory slot i 的 key K_i^m，token-level cosine similarity：
+c_{jl}^{m,i} = (q_{tj}^m · k_{il}^m) / (||q_{tj}^m|| ||k_{il}^m||)
+采用双向 nearest-neighbor matching：
+S_{Q→K,i}^m = (1/|Q_t^m|) Σ_j max_l c_{jl}^{m,i}
+S_{K→Q,i}^m = (1/|K_i^m|) Σ_l max_j c_{jl}^{m,i}
+S_i^m = 0.5 · (S_{Q→K,i}^m + S_{K→Q,i}^m)
+双向匹配的作用是减少单向 Chamfer/nearest-neighbor 的 many-to-one hub matching 风险。但它只是检索实现，不是创新。
+7. 三个可观察证据：匹配、明确性、切换收益
+i_m = argmax_i S_i^m
+s_m = S_{i_m}^m
+g_m = s_m - secondmax_i S_i^m
+b_m = S_{i_m}^m - S_{A_t}^m
+s_m 表示当前模态最好的历史匹配强度；g_m 表示 Top-1 相对于 Top-2 的明确程度；b_m 表示候选相对于 active state 的相对切换证据。三个量分别回答“像不像”“是否明确”“值不值得换”，不再把它们压成一个人为加权 confidence。
+退化处理：若 i_m=A_t，则该模态本身没有提出新的 state，不参与 switch-benefit CDF 的拟合；该模态在决策上视为 hold evidence。只有 i_m≠A_t 的样本进入 b_m 的经验分布 F_m^b。
+
+memory warm-up 必须显式处理。dynamic slots 未填满前，Top-2 margin 与满容量 memory 的统计分布不可比，因此 APSR 不参与决策：保持 A_t=M_0，仅按公共写入协议填充 memory。只有 M_0 加三个 dynamic slots 全部有效后才启用 retrieval，并开始记录用于 CDF/机制分析的 decision samples。不得通过复制 M_0 或重复 slot 人为凑满 M=4。
+8. 跨模态可比化：只做分布归一化，不训练 reliability/utility predictor
+由于 RGB/TIR 的 cosine score 与 margin 的数值尺度不保证一致，在线直接比较 s_R 与 s_T 或 g_R 与 g_T 不严谨。APSR-v0 采用固定 calibration set 的 empirical CDF，将每个模态映射到自身分布中的 percentile：
+p_m^s = F_m^s(s_m),   p_m^g = F_m^g(g_m),   p_m^b = F_m^b(b_m)
+F_m^s 与 F_m^g 只使用 memory 已满后的 calibration decisions；F_m^b 只能使用 memory 已满且 i_m≠A_t 的候选。经验 CDF 使用固定的右连续经验分位定义；超出 calibration 范围的值截断到 [0,1]，相同值采用 mid-rank，避免实现差异。所有 CDF、δ 和 τ_s 仅在 calibration sequences 上确定，并在 test sequence 上冻结。这里不存在 learned utility calibrator，但仍存在无标签的分布拟合，因此论文表述应为“frozen tracker with fixed label-free distributional calibration”，不要笼统声称“完全 training-free”。
+重要限制：CDF 仍然是数据集/parent 相关的分布对齐，而非普适的物理量。因此必须进行第二数据集验证或至少跨 sequence split 验证；不能宣称跨数据集自然泛化。
+9. 核心创新：双证据 Pareto retrieval authority
+不再使用 E_m=min(p_s,p_g)，因为 min 仍是一个人为压缩函数。APSR 采用双证据 Pareto dominance：只有当一个模态同时在匹配强度与检索明确性上明显优于另一模态时，才取得 retrieval authority。
+R ≻_δ T  ⇔  p_R^s - p_T^s > δ  AND  p_R^g - p_T^g > δ
+T ≻_δ R  ⇔  p_T^s - p_R^s > δ  AND  p_T^g - p_R^g > δ
+如果两者都不成立，则不授予新的 retrieval authority，而是 hold。这个规则的逻辑不是“谁看起来更清晰”，而是“谁在两个互补的 retrieval evidence 维度上同时占优”。
+这是整个 Innovation 2 最值得写进论文的机制：retrieval competition 发生在模态内部，但 retrieval authority 在模态之间竞争；一旦某模态取得 authority，另一模态不能再把检索结果 redirect 到第三个 slot。匹配强度与 Top-1/Top-2 margin 是互补但不保证统计独立的证据；论文不得将 Pareto 规则包装成独立性假设或理论保证。
+10. 切换收益与最终状态转移
+authority 仅决定“谁有资格决定”，并不保证“候选值得换”。因此保留一个独立的 switch-benefit threshold。对 i_m≠A_t 的候选，用固定 calibration CDF 得到：
+B_m = F_m^b(b_m)
+最终决策顺序：先处理 consensus，再处理单模态候选，再处理分歧。为了保持只有两个方法阈值，APSR-v0 只保留 δ（authority gap）与 τ_s（switch benefit percentile）。
+if  i_R=i_T=i≠A_t  and  min(B_R,B_T)>τ_s      →  A_{t+1}=i
+elif i_R=i_T=A_t                                  →  A_{t+1}=A_t
+elif i_R≠i_T, R ≻_δ T, and B_R>τ_s                →  A_{t+1}=i_R
+elif i_R≠i_T, T ≻_δ R, and B_T>τ_s                →  A_{t+1}=i_T
+else                                                →  A_{t+1}=A_t
+当某一模态 i_m=A_t 而另一模态提出新候选时，只有提出新候选的模态满足 Pareto dominance 且其 B_m 超过 τ_s 时才允许切换。否则保持 active。
+verifier 的权力被严格限制：另一模态可以通过“不授予 dominance”或“缺乏 consensus”导致 hold，但不能指定第三个 slot。这避免了“不可靠模态既失去检索权又保留无条件否决权”的逻辑矛盾。
+11. 涨点逻辑：从 historical headroom 到 expected net gain
+APSR 的涨点不是因为“更新得更频繁”，而是因为在有用切换与有害切换之间重新分配概率质量。定义：
+在 frozen counterfactual 阶段，J_{t+1}(i) 严格定义为：从同一 anchor bbox state 出发，将 slot i 作为模板对 frame t+1 独立前向后，预测框与 frame t+1 GT 框的 IoU。GT 只用于生成离线 utility label，不进入 query、CDF 或任何在线决策。
+Δ_t = J_{t+1}(A_{t+1}) - J_{t+1}(A_t)
+E[Δ_t] = P(beneficial switch)·E[Δ_t | beneficial]  -  P(harmful switch)·E[|Δ_t| | harmful]
+因此 memory 本身只提供 potential headroom；真正决定最终 AUC 增益的是：(1) 是否能找到比 active 更适合当前外观的历史状态；(2) 是否能把 harmful switch 拒绝掉。APSR 的机制贡献对应的是降低历史状态选择 regret，而不是制造新的 representation。
+J*_{action,t} = max{J_{t+1}(A_t), J_{t+1}(i_R), J_{t+1}(i_T)}
+Regret_t(method) = J*_{action,t} - J_{t+1}(A_{t+1}^{method})
+上述 regret 只比较当帧可由 RGB/TIR retrieval 提案的动作集。另外定义整个有效 memory 的 oracle headroom：
+J*_{memory,t} = max_{i∈valid(M_t)} J_{t+1}(i)
+MemoryHeadroom_t = J*_{memory,t} - J_{t+1}(A_t)
+如果 memory 内存在更好 slot 但 i_R/i_T 都没有提案它，这是 retrieval coverage failure，不能被 authority regret 隐藏。
+如果 APSR 有效，应同时看到 Regret 下降与 harmful-switch rate 下降，而不是仅看到总 switch frequency 下降。
+12. 为什么 asymmetric 可能优于 symmetric retrieval
+对称基线把两个模态强制放入同一个 slot competition：
+i_sym = argmax_i [w_R S_i^R + w_T S_i^T]
+当一个模态发生强 contamination 时，即使其权重不大，也可能改变错误 slot 与正确 slot 的相对排序。设正确状态 j、错误状态 k，则：
+d_sym = w_R(S_j^R-S_k^R) + w_T(S_j^T-S_k^T)
+只要退化模态中的异常扰动足以抵消健康模态的排序间隔，对称方法就可能发生错误翻转。APSR 在 driver 模态确定后，只使用该模态进行 slot argmax：
+i_APSR = argmax_i S_i^{m*}
+因此在 retrieval stage，低置信 counterpart 的 slot scores 不参与 argmax。严格地说，这只是一条 retrieval-stage property；它不能推出最终 tracking prediction 对 counterpart 扰动完全不敏感，因为 TIR/RGB 仍参加后续 TBSI tracking。
+13. 不宣称“理论保证”，只保留可验证的 Design Properties
+Design Property	严格含义	验证方式
+Low-confidence counterpart exclusion	当 counterpart 没有 retrieval authority 时，其 slot score 不参与 driver 的 argmax。	对 fixed score array 做控制实验；不要声称对原始输入扰动不敏感。
+One-step causal switching	frame t 的 evidence 只影响 A_{t+1}，不重新 forward frame t。	日志记录 forward count / state transition trace。
+Veto-only verification	secondary modality 最多导致 hold，不能 redirect 到第三 slot。	统计 third-slot redirect = 0。
+Initial-state preservation	M0 永久存在，不被 FIFO 淘汰。	检查所有 sequence 的 memory state。
+
+14. 一周 Kill Study：必须先离线，不要先跑闭环
+闭环 memory 会产生因果混淆：retrieval policy 不同 → 下一帧 bbox 不同 → candidate crop 不同 → 后续 memory 内容不同。因此第一阶段必须使用外生、冻结的 candidate memory，所有方法读取完全相同的 memory。
+
+冻结阶段采用唯一的 anchor-trajectory protocol：
+1) 用 S0 Static parent（始终使用 M0）完整运行 calibration/evaluation sequence，冻结每帧进入 tracker 前的 bbox state、当前帧预测框、pre-cross-modal features 和响应图。
+2) 在固定写入帧上，从该 anchor trajectory 生成 candidate image pair 与 8×8 key；所有 retrieval policy 共享这些候选和同一 FIFO slot 状态。
+3) 对每个有效决策帧 t，从完全相同的 anchor bbox state 出发，对 M_t 的每个有效 slot 分别在 frame t+1 做一次独立 counterfactual forward，生成完整的 J_{t+1}(i) 向量。A_t、i_R、i_T 的 utility 从该向量索引；所有 forward 都不得把预测状态传播到 t+2。
+4) frozen-memory 阶段的结果是 one-step utility、regret 与 switch statistics，不是可实现的连续 tracking trajectory，也不得称为 AUC。只有 E0/E1 闭环运行可以报告正式 Success/AUC、Precision、Norm Precision、OP50 和 OP75。
+冻结阶段的 anchor active state 恒为 M0，各 policy 在每个决策帧都从同一 S0 state 做一次性决策，不将自身 A_{t+1} 递推到下一帧。否则 query 的 template conditioning 与 bbox trajectory 会随 policy 改变，就不再是外生 memory 下的单变量检索比较。该阶段因而只回答“从 Static anchor 出发的局部选择是否更好”；状态递推的收益和误差累积必须由 E0/E1 回答。
+
+memory provenance 分成两个不可混用的层次：
+- U0-GT：固定写入帧使用 GT crop 和 GT-aligned ROI key，仅测理想历史覆盖上限，不参与在线方法比较。
+- U0-Pred / R0-R1 / A0-A2：使用 S0 anchor 的 predicted crop 和 predicted ROI key，测现实候选池中的可利用 headroom 与 retrieval quality。
+
+共享 memory maintenance 冻结为：M=4，M0 永久保留，三个 dynamic slots 按 FIFO 更新；每 25 帧写入一次当前同步 RGB-T candidate，不使用额外 response-quality admission。该规则只是公共压力测试基础设施，不作为创新，也不得为某一 retrieval policy 单独调整。短序列或 warm-up 未填满 memory 时保持 M0，不纳入满容量 authority 统计。
+建议建立一次性 counterfactual table：
+sequence | frame | active_slot | valid_slots | i_R | i_T | s_R | g_R | b_R | s_T | g_T | b_T | J(slot_0..3) | J*_memory | Δ_R | Δ_T | oracle_action
+其中 oracle action 为 argmax{0, Δ_R, Δ_T}；该 oracle 只用于离线分析，不参与任何在线决策。
+外生 memory 的重点是公平比较 retrieval policy，而不是模拟最终在线写入。GT memory 只用于 U0-GT upper bound；所有可部署方法必须使用同一组 S0-predicted slot、同一组 key 和同一 anchor active state。
+15. 最小实验矩阵（冻结版）
+编号	方法	目的	是否主结论
+S0	Static parent	基线	是
+U0-GT	GT frozen memory + oracle best state	测理想 historical coverage upper bound	诊断上限
+U0-Pred	S0-predicted frozen memory + oracle best state	测现实候选池的可利用 headroom	生死门
+R0	Frozen memory + global-pooled equal-weight symmetric retrieval	基础 memory retrieval control	是
+R1	Frozen memory + target-masked bidirectional equal-weight symmetric retrieval	隔离 fine-grained matching 本身的收益	是
+A0	Frozen memory + slot-score-percentile symmetric retrieval	最危险的尺度归一化简单替代方案	必须击败
+A1	Frozen memory + consensus/Pareto authority，不使用 benefit threshold	只验证 retrieval-authority 命题	核心
+A2	A1 + switch-benefit threshold τ_s	验证保守切换是否进一步降低 regret	最终 APSR-v0
+E0	Closed-loop symmetric	真实动态 memory baseline	确认
+E1	Closed-loop APSR	真实最终性能	最终
+P0	Paired vs independent vs driver+initial	验证 paired return 是否真的必要	关键消融
+H1/H2	A2 + standard hysteresis / score smoothing	本月不进入主计划；只有所有主证据提前完成后才允许一次检查	Deferred
+
+各对称控制的定义必须固定：
+- R0：每个模态分别对 Q/K 做 global average pooling 后计算 cosine，RGB/TIR 两个 slot score 等权平均，再取 argmax。
+- R1：使用第 6 节的 bidirectional score，S_i^sym=0.5(S_i^R+S_i^T)，再取 argmax。
+- A0：在 calibration sequences 上额外建立所有有效 slot score 的 F_m^slot；令 S_tilde_i^m=F_m^slot(S_i^m)，再以 0.5(S_tilde_i^R+S_tilde_i^T) 取 argmax。F_m^slot 与 top-1 evidence 的 F_m^s 不是同一个 CDF，禁止混用。
+- A1：若 i_R=i_T，则采用该共同候选；若不一致，则仅在一方 Pareto-dominates 时采用其候选，否则 hold。A1 不检查 B_m。
+- A2：在 A1 的可切换动作上增加第 10 节的 B_m>τ_s；论文最终方法是 A2，而 A1 是单变量机制消融。
+
+16. 机制指标与公式
+ConflictCoverage = P(i_R ≠ i_T)
+ActionableCoverage = P(one modality Pareto-dominates | i_R≠i_T)
+APA = P(selected driver has larger counterfactual utility | Pareto action, i_R≠i_T, utility non-tie)
+Regret = E[J* - J(method)]
+HSR = P(Δ_selected < 0 | switch)
+BSR = P(method switches to a beneficial candidate | max(Δ_R,Δ_T) > 0)
+CandidateHeadroom = E[max(0,Δ_R,Δ_T)]；CandidatePositiveCoverage = P(max(Δ_R,Δ_T)>0)
+MemoryHeadroom = E[max_{i∈valid(M_t)}J(i)-J(A_t)]；MemoryPositiveCoverage = P(max_i J(i)-J(A_t)>0)
+为了避免定义一个新的核心 scalar confidence，APA 使用 Pareto action label：若 R Pareto-dominates 则预测 R，若 T Pareto-dominates 则预测 T，否则 abstain。APA 必须与 ActionableCoverage 联合报告，防止方法通过大量 abstain 获得虚高准确率；同时报告在相同非平局样本上的多数类基线及 sequence-level bootstrap 95% CI。
+建议额外记录：switch frequency、wrong-switch count、beneficial-switch count、decision coverage、mean/median regret、catastrophic regressions、FPS。
+17. 生死门与晋级条件
+指标	内部晋级标准	不通过后的动作
+U0-Pred counterfactual headroom	MemoryHeadroom 的 sequence-bootstrap 95% CI 下界 > 0，MemoryPositiveCoverage≥10%，且正收益帧的平均增益≥0.05 IoU；不得用 frozen one-step table 宣称 AUC	停止 Innovation 2
+ConflictCoverage	≥ 10%	若过低，APSR 作用面不足；停止或降级为附加分析
+APA	在可决策 conflict frames 上高于多数类基线 ≥ 5 pp，且不能依赖极低 ActionableCoverage	停止；authority 不可预测
+Authority agreement	两个 evidence 维度与 true Δ_R-Δ_T 的方向/排序关系在 sequence bootstrap 下稳定为正；Pareto rule 本身不强造 scalar gap	停止；不做复杂模块救援
+Regret(A1) vs Regret(A0)	A1 更低	核心命题失败，停止
+A2 vs A1	sequence-bootstrap 下 Regret(A2)-Regret(A1) 的 95% CI 上界≤0.005 IoU，且 HSR 下降、BSR 降幅≤5 pp	若只靠拒绝大量切换降低 HSR 或 Regret 超出非劣界，删除 benefit threshold，最终方法退回 A1
+Closed-loop E1 vs E0	平均 AUC 正增益，且 catastrophic loss 不增加	停止闭环路线；不加外围模块
+Paired return	不劣于 independent / hybrid	否则弱化 paired-state claim
+
+这些阈值属于项目内部止损标准，不是文献保证。若需要保留“约 +1.0 AUC”的项目目标，只能用于 Week 3 的连续闭环 E1 vs S0/E0，不能用于 Week 1 的 one-step frozen-memory table。
+18. 严格实验协议与防过拟合规则
+1. 所有 calibration、CDF、δ、τ_s 的选择使用 sequence-level split；禁止 frame-level random split。
+2. 从冻结的 176-sequence RPP train proxy 中按 `sha256("APSR-20260917:" + sequence_name)` 排序，前 70% 作为 CDF-calibration，后 30% 作为 decision-development；必须保存独立 sequence list、manifest 和 SHA256。现有 RPP train/test manifests 不得修改。
+3. 冻结的 60-sequence RPP test 只用于一次 proxy confirmation，不参与 CDF、阈值、tap、ROI、write interval 或公式选择；full 244-sequence LasHeR test 只用于最终确认。
+4. 固定 parent tracker、checkpoint、memory size、FIFO write policy、25-frame write interval、ROI size 和 retrieval feature tap；任何主比较只改变 retrieval decision。
+5. Frozen-memory kill study 中，所有方法必须读取完全相同的外生 memory、anchor state 和 counterfactual utility table；禁止某一方法因为自身轨迹而产生不同 memory。
+6. Closed-loop 阶段采用 retrieve-before-write；candidate write schedule 对所有方法一致，且不针对某一方法调节。
+7. APSR-v0 只保留两个核心决策超参：δ 与 τ_s。预注册候选集合为 δ∈{0.00,0.05,0.10}、τ_s∈{0.50,0.70,0.90}；只在 decision-development sequences 上选择一次，之后完全冻结。不得因 RPP test 或 full test 结果追加网格。
+8. counterfactual utility 差异绝对值小于 0.01 IoU 时记为 utility tie，不进入 APA；但仍进入总体 regret 和 coverage 统计。
+9. 置信区间以 sequence 为重采样单位做 bootstrap，不得把 frame 当作独立样本制造过窄区间。
+10. 所有结果按 sequence manifest、code snapshot、checkpoint、protocol version 唯一命名，不覆盖 canonical baseline 目录。任何并行测试先完成串行/并行结果文件数量、序列集合、hash/数值一致性抽查，并遵守 RPP_TEST_THREADS=6。
+11. APSR 本身无训练随机性，但 parent checkpoint 仍可带来 seed 依赖。proxy 与 full confirmation 必须遵守项目的多 seed 口径，至少覆盖 seed 42 和 3407 的 parent；如果一个月内无法获得第二个 clean B3 checkpoint，只能将单 checkpoint 结果标记为初步证据，不得声称跨训练随机性稳定。
+19. TBSI 代码实现契约（最小改动）
+目标：不改变 backbone 的默认行为、不训练新网络、不增加部署时的第二次 tracking forward。新增 feature tap 属于受独立配置控制的只读输出；关闭 APSR/tap 时必须保持原 forward、state_dict、optimizer、推理精度和输出完全一致。实现前先保存 Git commit/等价代码快照。建议新增独立模块文件，例如 `lib/test/tracker/apsr_memory.py`，并在 tracker state machine 中插入三类操作。
+① 初始化：
+M0 = initial RGB-T template pair; active_slot = 0; dynamic slots empty. Memory key cache is empty until a candidate state is created.
+② 每帧 forward 后：
+read pre-cross-modal / template-conditioned retrieval features → ROIAlign predicted box to 8×8 → compute S_i^R/S_i^T → obtain i_R/i_T, s/g/b → normalize with frozen CDFs → Pareto authority → switch/hold for A_{t+1}.
+③ write：
+only after retrieval decision; every 25 frames insert the current predicted crop/key into the oldest dynamic FIFO slot; M0 is immutable; do not add response threshold, diversity eviction or method-specific admission in APSR-v0. No self-retrieval.
+④ 日志：
+sequence, frame, memory_full, active_slot_before/after, slot timestamps, i_R, i_T, raw S/s/g/b, p_R^s, p_R^g, p_T^s, p_T^g, B_R, B_T, decision reason, switch flag, forward count, per-frame latency, memory snapshot id/hash；oracle J/Δ 只写入独立 offline counterfactual table，禁止在线 tracker 读取。
+
+必须增加 P0 实现检查：APSR disabled 时逐帧输出与 parent 完全一致；feature tap 有限且 shape 固定；ROI 坐标映射通过合成框单元测试；每个部署帧 forward count=1；retrieve-before-write trace 成立；M0 从不被覆盖；序列切换时 memory/CDF state 正确重置。
+20. Paired return 的关键可证伪实验
+APSR 的 paired return 不是天然正确，而是必须证明的架构假设。对同一个 driver slot i*，至少比较三种返回方式：
+Paired:      (T_{i*}^R, T_{i*}^T)
+Independent: (T_{i_R}^R, T_{i_T}^T)
+Hybrid:      (T_{i*}^{m*}, T_0^{other})
+如果 Paired 明显优于 Independent 与 Hybrid，说明同步历史状态本身是有价值的；如果 Hybrid 更好，则不应继续把“paired return”作为核心创新。
+
+该实验只在 A1 已通过 A0 后启动。Independent 与 Hybrid 是新的模板组合，不能复用 paired slot 的 J(i)；必须从相同 anchor bbox state 对这两种组合分别执行独立 counterfactual forward。三种返回方式的 query、driver、候选 slot 和起始 state 必须一致，只改变送入 tracker 的 RGB/TIR template pairing。
+21. 与主流跟踪论文的“涨点逻辑”对齐
+主流工作	其涨点来源	APSR 吸收/避开之处
+STMTrack	历史时空信息覆盖 fixed-template 的 appearance limitation	吸收“history has headroom”，不复制其 memory architecture
+HIPTrack	精确历史信息可改善现有 Siamese tracker 且不必重训全部参数	吸收“历史状态读取”思想，不做 prompt network
+TUMFNet	动态 modality uncertainty affects robust fusion/template update	避开 uncertainty-aware update；只把证据用于 retrieval authority
+MoETrack	modality validity / when-to-fuse / adaptive modality switch	严格区分 prediction authority 与 retrieval authority
+BTMTrack	dynamic template + temporal-modal candidate elimination	不做 temporal-modal token elimination；避免落入相邻方法
+MPTrack（待一手核验）	multimodal prototype evaluation/update（暂存摘要）	核验前不用于新颖性结论
+DTPTrack（待一手核验）	历史状态 reliability calibration + drift suppression（暂存摘要）	核验前不用于新颖性结论
+
+22. 论文中允许的创新表述
+建议主贡献句：We formulate historical-state selection in RGB-T tracking as a cross-modal retrieval-authority problem and introduce an asymmetric paired-state retrieval policy, where the modality with stronger retrieval evidence controls historical-state selection while the counterpart modality can only support or abstain from the switch.
+中文建议：我们将 RGB-T 跟踪中的历史状态选择重新表述为跨模态检索控制权问题，并提出非对称成对状态检索机制：由当前检索证据更强的模态控制历史状态选择，另一模态仅能提供一致性支持或促使系统保持当前状态。
+禁止使用的主张："first reliability-guided template memory"、"novel multimodal template update"、"novel reliability network"、"theoretical guarantee of drift prevention"、"training-free learned calibrator"。这些说法会放大撞车或严谨性风险。
+23. 一个月执行路线（不再搜索新模块）
+时间	任务	输出	停止条件
+Day 1	保存代码快照；检查 canonical baseline diff；启动 clean B3 独立重训/恢复；同时审计第二 RGB-T 数据集的本地可用性、许可与适配成本	parent provenance + 数据可用性结论	若 B3 无法在 Day 2 固定，先用 canonical checkpoint 做机制 P0，但最终主结果仍需 B3
+Day 2–3	实现 feature-gated tap、ROIAlign、memory state、disabled parity 和单元测试	P0 validation report	parity、坐标、forward-count 或 state reset 任一失败，不生成实验结果
+Day 4–7	生成 anchor memory/counterfactual table；完成 S0/U0-GT/U0-Pred/R0/R1/A0/A1；统计 headroom、coverage、APA、Regret	Kill Study v1	未过 U0-Pred/coverage/APA/A1>A0 任一项，停止 APSR
+Week 2	建立 CDF-cal/development split；加入 A2；预注册并冻结 δ/τ_s；在冻结 RPP train-derived protocol 上完成机制确认	Frozen-memory APSR report	A2 不降 regret 或 HSR 无改善，则最终方法退回 A1；A1 若不再稳定优于 A0 则停止
+Week 3	实现 E0/E1 闭环；完成 paired/independent/hybrid；串并行一致性后运行 60-sequence RPP test，再决定是否 full LasHeR	End-to-end evidence	E1 不优于 E0 或 catastrophic loss 增加，停止外围增强并降级 APSR 主张
+Week 4	优先完成第二 RGB-T 数据集；随后完成 full LasHeR、速度、属性、阈值敏感性、失败案例、图表和正文。只有这些全部提前完成才允许 H1/H2	投稿证据包	若跨数据集/设置不成立，明确限定为 TBSI/LasHeR-specific，不用额外模块补救
+
+24. APSR-v0 最终冻结规范
+1) Memory: M=4；M0 永久不变；三个 dynamic slots 每 25 帧按公共 FIFO 规则写入，不设 quality gate。
+2) Warm-up: 未填满三个 dynamic slots 时恒保持 M0；不复制 M0 凑满 memory，不将这些帧纳入 CDF 或 authority 统计。
+3) Tap/Query: 固定取 block index 3 的普通 ViT block 输出、第一次 TBSI interaction 之前的 cross-modal-isolated, template-conditioned search feature；只用预测框在 16×16 grid 上 ROIAlign 为 8×8 query。
+4) Retrieval: 使用双向 token matching 得到 S_i^m，候选 i_m=argmax_i S_i^m。
+5) Evidence: s_m=S_{i_m}^m，g_m=s_m-secondmax_i S_i^m，b_m=S_{i_m}^m-S_{A_t}^m。
+6) Calibration: 仅使用 calibration sequences 的满 memory 决策拟合固定 empirical CDF；b 的 CDF 只接收 i_m≠A_t 样本。这是 label-free distributional calibration，不是 learned calibrator，也不宣称 fully training-free。
+7) A1 authority: consensus 直接采用共同候选；conflict 时只允许在 (p^s,p^g) 上 Pareto-dominant 的模态提案，否则 hold；A1 不使用 B_m。
+8) A2 final: 在 A1 可切换动作上增加 B_m=F_m^b(b_m)>τ_s；A2 是最终方法，A1 是 authority-only 单变量消融。
+9) Transition: A_{t+1}∈{A_t,i_R,i_T}；secondary modality 只能支持或促使 hold，不能 redirect 到第三个 slot。
+10) Causality: 每帧只一次部署前向；先在 M_t 上 retrieve 并决定 A_{t+1}，再写入 M_{t+1}。
+11) Evaluation: frozen kill study 恒从 S0/M0 anchor 作 one-step counterfactual，只报 utility/regret；closed-loop E0/E1 才递推状态并报 tracking AUC。
+冻结后不再增加 frequency gate、RAG、Hopfield、diversity memory、distractor module、learned utility predictor 或额外 temporal module。任何新增组件都必须先经过独立研究立项，不属于本论文 APSR-v0。
+25. 近期参考文献与核验状态（截至 2026-09-17）
+[1] Hui, T. et al. Bridging Search Region Interaction With Template for RGB-T Tracking. CVPR 2023. CVF Open Access: https://openaccess.thecvf.com/content/CVPR2023/html/Hui_Bridging_Search_Region_Interaction_With_Template_for_RGB-T_Tracking_CVPR_2023_paper.html
+[2] Fu, Z. et al. STMTrack: Template-free Visual Tracking with Space-time Memory Networks. CVPR 2021. Official code: https://github.com/fzh0917/STMTrack
+[3] Cai, W. et al. HIPTrack: Visual Tracking with Historical Prompts. CVPR 2024. Official code: https://github.com/WenRuiCai/HIPTrack
+[4] Ding, Z. et al. Template-based Uncertainty Multimodal Fusion Network for RGBT Tracking. IJCAI 2025. https://www.ijcai.org/proceedings/2025/102
+[5] Zhangyong-Tang et al. Revisiting RGBT Tracking Benchmarks From the Perspective of Modality Validity: A New Benchmark, Problem, and Solution / MoETrack. TIP 2025; official code: https://github.com/Zhangyong-Tang/MoETrack
+[6] Zhang, Z. et al. BTMTrack: Robust RGB-T tracking via dual-template bridging and temporal-modal candidate elimination. Image and Vision Computing, 2025. https://www.sciencedirect.com/science/article/pii/S0262885625002641
+[7] Liu, L. et al. Unveiling the Power of Multi-modal Template Update in RGBT Tracking. 2026; official code: https://github.com/liulei970507/MPTrack
+[8] Huang, Y. et al. Drift-Resilient Temporal Priors for Visual Tracking. CVPR 2026. https://openaccess.thecvf.com/content/CVPR2026/html/Huang_Drift-Resilient_Temporal_Priors_for_Visual_Tracking_CVPR_2026_paper.html; code: https://github.com/NorahGreen/DTPTrack
+[9] Li, H. et al. RAGTrack: Language-aware RGBT Tracking with Retrieval-Augmented Generation. CVPR 2026. https://openaccess.thecvf.com/content/CVPR2026/html/Li_RAGTrack_Language-aware_RGBT_Tracking_with_Retrieval-Augmented_Generation_CVPR_2026_paper.html; code: https://github.com/IdolLab/RAGTrack
+核验声明：[1]–[6] 可作为当前方案的定位依据；[7]–[9] 在本次环境中未能完成一手论文页、PDF、作者与代码仓的交叉核验。投稿前必须逐条人工核对题名、作者、venue/year、方法内容和 URL；核验前不得在 abstract/introduction/related work 中将其当作确定的撞车证据。
+26. 本项目本地证据（用于实验解释，不作为外部文献）
+本项目已完成 Innovation 1 融合搜索的系统性关闭：B3 V2 Joint Fusion 作为当前 clean parent；SMSA、TSMS、Perceiver、global gating、Top-K、content/spatial bias、complementary adapter、correspondence-guided fusion、temperature refinement、channel-selective residual 等路线已有负结果或缺乏支持，当前不再继续。最后一次 channel variance 诊断也未发现少数 channel 承载大部分 fusion residual 的证据，因此不训练 selective-residual projector。
+Innovation 2 尚无可追溯的本地 oracle-memory 结果证明 template adaptation 存在可利用 headroom。“历史状态可能改善 Static parent”目前只是 hypothesis，不是 parsed 或 computed claim。U0-GT 与 U0-Pred 将分别给出理想覆盖上限和现实候选池 headroom，它们是本路线的首份有效证据；在该表生成并通过第 17 节门槛前，不得在论文或实验报告中写成“已发现 headroom”。
+
+27. 投稿强度与最后优先级
+仅在 TBSI + LasHeR 上获得一个单 checkpoint 正增益，不足以支撑强泛化主张。在一个月的预算内，证据优先级冻结为：核心 kill study 因果链 > E0/E1 闭环 > 第二 RGB-T 数据集 > 多 parent seed/checkpoint > 最小敏感性与失败案例 > 任何额外模块。如果第二数据集因许可或适配成本无法完成，结论必须限定为 TBSI/LasHeR-specific，并在 limitation 中明示。
+最小敏感性只检查会改变作用面的基础设定：在 frozen table 上报告预注册的 δ/τ_s 网格，并在核心结论通过后用最多两个额外设定检查 memory/write 结论是否翻转。该检查只用于 robustness，不得回到 test set 选择 M 或 write interval。

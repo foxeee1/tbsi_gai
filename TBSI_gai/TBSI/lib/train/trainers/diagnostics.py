@@ -147,7 +147,7 @@ class Diagnostics:
                         f'{signals.get("xv_template_norm", 0):.4f},'
                         f'{signals.get("xi_template_norm", 0):.4f},'
                         f'{signals.get("xv_search_norm", 0):.4f},'
-                        f'{signals.get("xi_search_norm", 0):.4f}\n')
+                f'{signals.get("xi_search_norm", 0):.4f}\n')
 
     def log_all(self, model, stats_dict, step, epoch):
         """Convenience: log all diagnostics in one call."""
