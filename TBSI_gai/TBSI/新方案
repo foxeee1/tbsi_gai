@@ -57,6 +57,7 @@ Q_t^m = ROIAlign(F_t^m, b̂_t, 8×8) ∈ R^{64×d}
 这里必须只使用预测目标区域覆盖的 search tokens，不能平均全部 16×16=256 search tokens。否则背景占多数，会直接稀释历史状态匹配。
 ROIAlign 使用 box head 在 search crop 坐标系内输出、尚未 map-back 到原图的归一化预测框；先从 cxcywh 转成 xyxy，再映射到 16×16 feature grid。禁止使用 GT box 构造在线 query。GT box 只允许出现在离线 oracle/counterfactual 标注中。
 写入候选的实际模板仍是当前 RGB/TIR 原图按 b̂_t 裁剪得到的同步 image pair；Q_t^m 只是 retrieval key/descriptor，不声称等于最终模板 feature。
+必须正视 active-template conditioning 的混杂：Q_t^m 与历史 K_i^m 可能由不同 active template 条件化，并可能对当前 active slot 产生自强化偏置。它不能用命名规避，必须在 P0 做离线 confound diagnostic：对固定帧和固定 bbox，仅替换 active template 重算 query，报告 top-1 slot agreement、active-slot selection rate 和 score/rank shift。若只替换 active template 就系统性改写检索排序，或 U0-Pred 通过但 retrieval recall 近乎失效，则当前 descriptor 不足以支撑 authority claim；本月路线应停止而不是再加 correction module。
 6. 双向细粒度检索分数
 对于当前 query Q_t^m 与 memory slot i 的 key K_i^m，token-level cosine similarity：
 c_{jl}^{m,i} = (q_{tj}^m · k_{il}^m) / (||q_{tj}^m|| ||k_{il}^m||)
@@ -78,7 +79,7 @@ memory warm-up 必须显式处理。dynamic slots 未填满前，Top-2 margin �
 由于 RGB/TIR 的 cosine score 与 margin 的数值尺度不保证一致，在线直接比较 s_R 与 s_T 或 g_R 与 g_T 不严谨。APSR-v0 采用固定 calibration set 的 empirical CDF，将每个模态映射到自身分布中的 percentile：
 p_m^s = F_m^s(s_m),   p_m^g = F_m^g(g_m),   p_m^b = F_m^b(b_m)
 F_m^s 与 F_m^g 只使用 memory 已满后的 calibration decisions；F_m^b 只能使用 memory 已满且 i_m≠A_t 的候选。经验 CDF 使用固定的右连续经验分位定义；超出 calibration 范围的值截断到 [0,1]，相同值采用 mid-rank，避免实现差异。所有 CDF、δ 和 τ_s 仅在 calibration sequences 上确定，并在 test sequence 上冻结。这里不存在 learned utility calibrator，但仍存在无标签的分布拟合，因此论文表述应为“frozen tracker with fixed label-free distributional calibration”，不要笼统声称“完全 training-free”。
-重要限制：CDF 仍然是数据集/parent 相关的分布对齐，而非普适的物理量。因此必须进行第二数据集验证或至少跨 sequence split 验证；不能宣称跨数据集自然泛化。
+重要限制：CDF 仍然是数据集/parent 相关的分布对齐，而非普适的物理量。因此必须进行第二数据集验证或至少跨 sequence split 验证；不能宣称跨数据集自然泛化。此外，δ/τ_s 若根据 development sequence 上的 GT counterfactual utility 选择，则 APSR 整体属于 validation-tuned policy；只有 CDF 拟合过程是 label-free，不得将整个方法称为 label-free。
 9. 核心创新：双证据 Pareto retrieval authority
 不再使用 E_m=min(p_s,p_g)，因为 min 仍是一个人为压缩函数。APSR 采用双证据 Pareto dominance：只有当一个模态同时在匹配强度与检索明确性上明显优于另一模态时，才取得 retrieval authority。
 R ≻_δ T  ⇔  p_R^s - p_T^s > δ  AND  p_R^g - p_T^g > δ
@@ -195,7 +196,7 @@ Paired return	不劣于 independent / hybrid	否则弱化 paired-state claim
 4. 固定 parent tracker、checkpoint、memory size、FIFO write policy、25-frame write interval、ROI size 和 retrieval feature tap；任何主比较只改变 retrieval decision。
 5. Frozen-memory kill study 中，所有方法必须读取完全相同的外生 memory、anchor state 和 counterfactual utility table；禁止某一方法因为自身轨迹而产生不同 memory。
 6. Closed-loop 阶段采用 retrieve-before-write；candidate write schedule 对所有方法一致，且不针对某一方法调节。
-7. APSR-v0 只保留两个核心决策超参：δ 与 τ_s。预注册候选集合为 δ∈{0.00,0.05,0.10}、τ_s∈{0.50,0.70,0.90}；只在 decision-development sequences 上选择一次，之后完全冻结。不得因 RPP test 或 full test 结果追加网格。
+7. APSR-v0 只保留两个核心决策超参：δ 与 τ_s。预注册候选集合为 δ∈{0.00,0.05,0.10}、τ_s∈{0.50,0.70,0.90}。选参必须保持单变量：先以 decision-development sequences 上的 mean action regret 最小选择 A1 的 δ，并永久冻结该 δ；再在同一 δ 下以 mean action regret 最小选择 A2 的 τ_s。并列时依次选 HSR 更低、switch frequency 更低、数值更大的保守阈值。选择完成后对 RPP test 和 full test 完全冻结，不得追加网格或联合重调 δ/τ_s。由于该选择使用 GT utility，论文只能声称“no additional network training”，不能声称整体 label-free。
 8. counterfactual utility 差异绝对值小于 0.01 IoU 时记为 utility tie，不进入 APA；但仍进入总体 regret 和 coverage 统计。
 9. 置信区间以 sequence 为重采样单位做 bootstrap，不得把 frame 当作独立样本制造过窄区间。
 10. 所有结果按 sequence manifest、code snapshot、checkpoint、protocol version 唯一命名，不覆盖 canonical baseline 目录。任何并行测试先完成串行/并行结果文件数量、序列集合、hash/数值一致性抽查，并遵守 RPP_TEST_THREADS=6。
@@ -211,7 +212,7 @@ only after retrieval decision; every 25 frames insert the current predicted crop
 ④ 日志：
 sequence, frame, memory_full, active_slot_before/after, slot timestamps, i_R, i_T, raw S/s/g/b, p_R^s, p_R^g, p_T^s, p_T^g, B_R, B_T, decision reason, switch flag, forward count, per-frame latency, memory snapshot id/hash；oracle J/Δ 只写入独立 offline counterfactual table，禁止在线 tracker 读取。
 
-必须增加 P0 实现检查：APSR disabled 时逐帧输出与 parent 完全一致；feature tap 有限且 shape 固定；ROI 坐标映射通过合成框单元测试；每个部署帧 forward count=1；retrieve-before-write trace 成立；M0 从不被覆盖；序列切换时 memory/CDF state 正确重置。
+必须增加 P0 实现检查：APSR disabled 时逐帧输出与 parent 完全一致；feature tap 有限且 shape 固定；ROI 坐标映射通过合成框单元测试；每个部署帧 forward count=1；retrieve-before-write trace 成立；M0 从不被覆盖；序列切换时 memory/CDF state 正确重置；并完成第 5 节的 active-template conditioning confound diagnostic。
 20. Paired return 的关键可证伪实验
 APSR 的 paired return 不是天然正确，而是必须证明的架构假设。对同一个 driver slot i*，至少比较三种返回方式：
 Paired:      (T_{i*}^R, T_{i*}^T)
@@ -233,7 +234,7 @@ DTPTrack（待一手核验）	历史状态 reliability calibration + drift suppr
 22. 论文中允许的创新表述
 建议主贡献句：We formulate historical-state selection in RGB-T tracking as a cross-modal retrieval-authority problem and introduce an asymmetric paired-state retrieval policy, where the modality with stronger retrieval evidence controls historical-state selection while the counterpart modality can only support or abstain from the switch.
 中文建议：我们将 RGB-T 跟踪中的历史状态选择重新表述为跨模态检索控制权问题，并提出非对称成对状态检索机制：由当前检索证据更强的模态控制历史状态选择，另一模态仅能提供一致性支持或促使系统保持当前状态。
-禁止使用的主张："first reliability-guided template memory"、"novel multimodal template update"、"novel reliability network"、"theoretical guarantee of drift prevention"、"training-free learned calibrator"。这些说法会放大撞车或严谨性风险。
+禁止使用的主张："first reliability-guided template memory"、"novel multimodal template update"、"novel reliability network"、"theoretical guarantee of drift prevention"、"training-free learned calibrator"、"fully label-free method"。这些说法会放大撞车或严谨性风险。准确表述是：no additional network training; label-free empirical-CDF fitting; validation-tuned decision thresholds。
 23. 一个月执行路线（不再搜索新模块）
 时间	任务	输出	停止条件
 Day 1	保存代码快照；检查 canonical baseline diff；启动 clean B3 独立重训/恢复；同时审计第二 RGB-T 数据集的本地可用性、许可与适配成本	parent provenance + 数据可用性结论	若 B3 无法在 Day 2 固定，先用 canonical checkpoint 做机制 P0，但最终主结果仍需 B3
