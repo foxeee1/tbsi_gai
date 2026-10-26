@@ -1,8 +1,0 @@
-- [x] Reconcile prior S1 state-feedback evidence and select one mechanism diagnostic.
-- [x] Verify M1 protected config/checkpoint hashes and current process/GPU state.
-- [x] Freeze and hash the 12-sequence train-side manifest.
-- [x] Verify predictor and policy hashes, available data, and tracker construction.
-- [x] Run paired FP32 S1-state/M1-state rollout serially.
-- [x] Compute fixed-horizon labels and per-sequence risk-signal metrics.
-- [x] Record report, manifest, outputs, and final status in both asset registries.
-- [x] Recheck protected hashes and resource state.

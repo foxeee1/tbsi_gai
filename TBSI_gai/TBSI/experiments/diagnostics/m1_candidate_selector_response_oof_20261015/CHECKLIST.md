@@ -1,5 +1,0 @@
-- [x] 固定三候选和 144 个状态。
-- [x] 提取冻结 response evidence。
-- [x] 执行 sequence-LOSO selector。
-- [x] 输出性能和逐序列结果。
-- [x] 更新归因：停止 selector 特征扩展，转向 center/crop 可达性审计。

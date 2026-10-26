@@ -188,77 +188,7 @@ def build_dataloaders(cfg, settings):
 
 def get_optimizer_scheduler(net, cfg):
     train_cls = getattr(cfg.TRAIN, "TRAIN_CLS", False)
-    prune_only = getattr(cfg.TRAIN, "PRUNE_ONLY", False)
-    cplain_only = getattr(cfg.TRAIN, "CPLAIN_ONLY", False)
-    cfvi_only = getattr(cfg.TRAIN, "CFVI_ONLY", False)
-    adaptive_router_only = getattr(cfg.TRAIN, "ADAPTIVE_POST_ROUTER_ONLY", False)
-    early_utility_router_only = getattr(cfg.TRAIN, "EARLY_UTILITY_ROUTER_ONLY", False)
-    strip_score_only = getattr(cfg.TRAIN, "STRIP_SCORE_ONLY", False)
-    if early_utility_router_only:
-        trainable = [p for n, p in net.named_parameters()
-                     if n.startswith('backbone.early_utility_router.') and p.requires_grad]
-        if not trainable:
-            raise ValueError('TRAIN.EARLY_UTILITY_ROUTER_ONLY requires trainable router parameters')
-        param_dicts = [{'params': trainable, 'lr': cfg.TRAIN.LR}]
-        if is_main_process():
-            print('Early utility router-only optimizer: {} parameters'.format(
-                sum(parameter.numel() for parameter in trainable)))
-    elif adaptive_router_only:
-        trainable = [p for n, p in net.named_parameters()
-                     if n.startswith('adaptive_post_fusion.') and p.requires_grad]
-        if not trainable:
-            raise ValueError('TRAIN.ADAPTIVE_POST_ROUTER_ONLY requires trainable router parameters')
-        param_dicts = [{'params': trainable, 'lr': cfg.TRAIN.LR}]
-        if is_main_process():
-            print('Adaptive post-fusion router-only optimizer: {} parameters'.format(len(trainable)))
-    elif strip_score_only:
-        refiner = getattr(getattr(net, 'box_head', None), 'strip_score_refiner', None)
-        if refiner is None:
-            raise ValueError('TRAIN.STRIP_SCORE_ONLY requires the enabled score refiner alone')
-        trainable = []
-        for name, parameter in net.named_parameters():
-            parameter.requires_grad = name.startswith('box_head.strip_score_refiner.')
-            if parameter.requires_grad:
-                trainable.append(parameter)
-        if not trainable:
-            raise ValueError('TRAIN.STRIP_SCORE_ONLY has no trainable parameters')
-        param_dicts = [{'params': trainable, 'lr': cfg.TRAIN.LR}]
-        if is_main_process():
-            print('Strip-score-only training: M1 state frozen; score refiner trainable')
-    elif cplain_only:
-        param_dicts = [{"params": [p for n, p in net.named_parameters()
-                                    if ("early_search_residual" in n or "post_tbsi_residual" in n)
-                                    and p.requires_grad],
-                        "lr": cfg.TRAIN.LR}]
-        if is_main_process():
-            print("Cplain-only optimizer: M1 frozen; early_search_residual trainable")
-    elif cfvi_only:
-        trainable = []
-        for n, p in net.named_parameters():
-            p.requires_grad = "cfvi" in n.lower()
-            if p.requires_grad:
-                trainable.append((n, p))
-        if not trainable:
-            raise ValueError("TRAIN.CFVI_ONLY requires CFVI parameters")
-        param_dicts = [{"params": [p for _, p in trainable], "lr": cfg.TRAIN.LR}]
-        if is_main_process():
-            print("CFVI-only training; trainable parameters:")
-            for n, _ in trainable:
-                print(n)
-    elif prune_only:
-        trainable = []
-        for n, p in net.named_parameters():
-            p.requires_grad = "bridge_token_pruner" in n
-            if p.requires_grad:
-                trainable.append((n, p))
-        if not trainable:
-            raise ValueError("TRAIN.PRUNE_ONLY requires bridge_token_pruner parameters")
-        param_dicts = [{"params": [p for _, p in trainable], "lr": cfg.TRAIN.LR}]
-        if is_main_process():
-            print("Pruner-only training: original model frozen; trainable parameters:")
-            for n, _ in trainable:
-                print(n)
-    elif train_cls:
+    if train_cls:
         print("Only training classification head. Learnable parameters are shown below.")
         param_dicts = [
             {"params": [p for n, p in net.named_parameters() if "cls" in n and p.requires_grad]}
