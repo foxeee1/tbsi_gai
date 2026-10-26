@@ -1,0 +1,94 @@
+{
+  "id": "M1-REJECTED-CANDIDATE-WEIGHT-CLEANUP-20261024",
+  "created_utc": "2026-10-24T14:39:07Z",
+  "mode": "delete",
+  "count": 14,
+  "bytes": 10598717508,
+  "reports_and_tracking_results_retained": true,
+  "files": [
+    {
+      "path": "output/experiments/M1_EARLY_SEARCH_RELATION_BIAS_QUICK3_20261024/checkpoints/TBSITrack_ep0003.pth.tar",
+      "bytes": 442246959,
+      "sha256_before_delete": "97251c5a788cfa0ce62a1c8f2598f190b09b20253ed6844ef6c015fa4806f79f",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_TEMPLATE_VALUE_RECON_SCREEN_20261023/checkpoints/TBSITrack_ep0001.pth.tar",
+      "bytes": 442831813,
+      "sha256_before_delete": "a2c6846b321990cb60045451d1544158567d36adbcc06c58187e7e34c8016d79",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_LOCAL_CROSS_MODAL_CORRESPONDENCE_QUICK3_20261024/checkpoints/TBSITrack_ep0003.pth.tar",
+      "bytes": 1329243369,
+      "sha256_before_delete": "4827fc86e537c620174ff460060e60c7ccd749a52fab4afd9ce4a9ed317d17da",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_LOCAL_CROSS_MODAL_CORRESPONDENCE_CONTROL_QUICK3_20261024/checkpoints/TBSITrack_ep0003.pth.tar",
+      "bytes": 1321847561,
+      "sha256_before_delete": "b139979420fd255f02ba5843ee80f804f9adabaf5134c350e8d8a6c6afd45a01",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_QUERY_CONDITIONED_CROSS_VALUE_QUICK3_20261024/checkpoints/TBSITrack_ep0001.pth.tar",
+      "bytes": 441169187,
+      "sha256_before_delete": "ec810b4020f8f379122e4cab8ca992604acf83a6d8d85230a07650a54695e34c",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_QUERY_CONDITIONED_CROSS_VALUE_QUICK3_20261024/checkpoints/TBSITrack_ep0002.pth.tar",
+      "bytes": 441174051,
+      "sha256_before_delete": "9e00cb077ee0be144cdf9a8adb769aeecf173f2c7d4010a1d7059a0d3f39acb2",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_QUERY_CONDITIONED_CROSS_VALUE_QUICK3_20261024/checkpoints/TBSITrack_ep0003.pth.tar",
+      "bytes": 441178915,
+      "sha256_before_delete": "615bc792aaf6f24ea35126500b35948441842f4fe134e423fe6f432ca8c3a54e",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_QUERY_CONDITIONED_CROSS_VALUE_CONTROL_QUICK3_20261024/checkpoints/TBSITrack_ep0001.pth.tar",
+      "bytes": 1321796323,
+      "sha256_before_delete": "24e4f06095eb5fe645b8b680d6f701a9d46ca742deec2e7652fbe55b2c6bd3cf",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_QUERY_CONDITIONED_CROSS_VALUE_CONTROL_QUICK3_20261024/checkpoints/TBSITrack_ep0002.pth.tar",
+      "bytes": 1321801187,
+      "sha256_before_delete": "ae2da80caad9c6adc9573e6b583cc87470e635d6df8543c770369e342ef6548e",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_QUERY_CONDITIONED_CROSS_VALUE_CONTROL_QUICK3_20261024/checkpoints/TBSITrack_ep0003.pth.tar",
+      "bytes": 1321805987,
+      "sha256_before_delete": "deee969de05a63e59be683ebe0dd91ff7a1331cc00e08065cfaff1e5a1815d38",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_SPATIAL_TOKEN_BRIDGE_SCREEN_20261023/checkpoints/TBSITrack_ep0001.pth.tar",
+      "bytes": 443405139,
+      "sha256_before_delete": "644c2c455f4e3e928be4115bef7ddde70b020d571a7855223f3cfe7024a88757",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_SPATIAL_TOKEN_BRIDGE_LEARNABILITY_10EP_20261024/checkpoints/TBSITrack_ep0001.pth.tar",
+      "bytes": 443404179,
+      "sha256_before_delete": "63da9b13fec6ff59a372a7576e2df459f9975675aee99bf0cbcf4f637c671f7c",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_SPATIAL_TOKEN_BRIDGE_LEARNABILITY_10EP_20261024/checkpoints/TBSITrack_ep0005.pth.tar",
+      "bytes": 443405267,
+      "sha256_before_delete": "e8a061d82600b659f5d07db9b371ed9b914cc1c80db0009b03bf269853fc32a7",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_SPATIAL_TOKEN_BRIDGE_LEARNABILITY_10EP_20261024/checkpoints/TBSITrack_ep0010.pth.tar",
+      "bytes": 443407571,
+      "sha256_before_delete": "eecceb40e3bd273d16afe6c4638154d92d189f1334caef3a55c08fbdc5e125cf",
+      "status": "DELETED"
+    }
+  ]
+}

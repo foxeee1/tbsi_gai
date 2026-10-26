@@ -145,6 +145,24 @@ class BaseBackbone(nn.Module):
         Joint feature extraction and relation modeling for the basic ViT backbone.
         """
         temporal_tokens = kwargs.pop('temporal_tokens', None)
-        x, aux_dict = self.forward_features(z, x, temporal_tokens=temporal_tokens)
+        template_fg_masks = kwargs.pop('template_fg_masks', None)
+        diagnostic = kwargs.pop('diagnostic', False)
+        diagnostic_early_block = kwargs.pop('diagnostic_early_block', 2)
+        diagnostic_late_block = kwargs.pop('diagnostic_late_block', 9)
+        diagnostic_tbsi_index = kwargs.pop('diagnostic_tbsi_index', 0)
+        diagnostic_post_block = kwargs.pop('diagnostic_post_block', 5)
+        if diagnostic:
+            x, aux_dict = self.forward_features(
+                z, x, temporal_tokens=temporal_tokens,
+                template_fg_masks=template_fg_masks,
+                diagnostic=True,
+                diagnostic_early_block=diagnostic_early_block,
+                diagnostic_late_block=diagnostic_late_block,
+                diagnostic_tbsi_index=diagnostic_tbsi_index,
+                diagnostic_post_block=diagnostic_post_block)
+        else:
+            x, aux_dict = self.forward_features(
+                z, x, temporal_tokens=temporal_tokens,
+                template_fg_masks=template_fg_masks)
 
         return x, aux_dict

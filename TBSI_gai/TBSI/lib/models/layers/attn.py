@@ -225,6 +225,9 @@ class Attention_st(nn.Module):
         # TBSI_ATTR_STATS=1 and does not alter the forward values.
         self.last_smsa_attention = None
         self.last_smsa_reference_attention = None
+        # P1 diagnostic-only cache. Disabled by default and never used by the
+        # forward path; it stores pre-dropout attention probabilities.
+        self.last_attention = None
         # Training-only TSMS capture. Unlike last_smsa_attention this keeps
         # the autograd graph alive until the actor has formed L_cov.
         self.last_smsa_attention_for_loss = None
@@ -239,12 +242,16 @@ class Attention_st(nn.Module):
                                                                           relative_position_index.max() + 1)))
             trunc_normal_(self.relative_position_bias_table, std=0.02)
 
-    def forward(self, x, mask=None, return_attention=False, quality_mask=None):
+    def forward(self, x, mask=None, return_attention=False, quality_mask=None,
+                template_fg_mask=None, conditioned_message_alpha=0.0,
+                conditioned_message_mode='off', conditioned_message_temperature=0.25):
         """quality_mask: (B, N_search, 1) — per-search-token confidence in [0,1].
         [Phase 1 Fix] Applied as PRE-softmax logit bias (instead of post-softmax multiply).
         Principle: attention gates should operate in logit space, not probability space.
         """
         B, N, C = x.shape
+        self.last_attention = None
+        input_tokens = x
 
         lens_z = 64  # Number of template tokens
         lens_x = 256  # Number of search region tokens
@@ -294,6 +301,9 @@ class Attention_st(nn.Module):
         else:
             attn = attn.softmax(dim=-1)
 
+        if self.mode == 's2t' and os.environ.get('TCSI_DUMP_ATTENTION', '0') == '1':
+            self.last_attention = attn.detach().float().cpu()
+
         if self.use_smsa:
             # TSMS is training-only. Do not retain attention in inference;
             # inference remains the original SMSA forward path.
@@ -325,6 +335,51 @@ class Attention_st(nn.Module):
         x = x.reshape(B, -1, C)  # B, lens_z/x, C; NOTE: Rearrange channels, marginal improvement
         x = self.proj(x)
         x = self.proj_drop(x)
+
+        # Search-position-conditioned modulation of the template-to-search
+        # message. The evidence is computed on the same 16x16 search axis as
+        # the message, so it cannot be confused with the 8x8 template axis.
+        # The default mode/alpha are exact no-ops for the parent path.
+        if (self.mode == 't2s' and template_fg_mask is not None and
+                conditioned_message_mode != 'off' and float(conditioned_message_alpha) != 0.0):
+            if template_fg_mask.shape != (B, lens_z):
+                raise ValueError('conditioned message foreground mask must be [B,64]')
+            weights = template_fg_mask.to(device=x.device, dtype=x.dtype).clamp_min(0.0)
+            template_tokens = input_tokens[:, :lens_z, :]
+            search_tokens = input_tokens[:, lens_z:, :]
+            template_norm = F.normalize(template_tokens.float(), dim=-1, eps=1e-6)
+            search_norm = F.normalize(search_tokens.float(), dim=-1, eps=1e-6)
+            proto = F.normalize((template_norm * weights.float().unsqueeze(-1)).sum(1) /
+                                weights.float().sum(1, keepdim=True).clamp_min(1e-6),
+                                dim=-1, eps=1e-6)
+            similarity = torch.matmul(proto.unsqueeze(1), search_norm.transpose(1, 2)).squeeze(1)
+            side = int(round(lens_x ** 0.5))
+            peak = similarity.argmax(dim=-1)
+            yy, xx = torch.meshgrid(torch.arange(side, device=x.device),
+                                    torch.arange(side, device=x.device), indexing='ij')
+            local = ((yy.reshape(1, -1) - (peak // side).unsqueeze(1)).abs() <= 1) & \
+                    ((xx.reshape(1, -1) - (peak % side).unsqueeze(1)).abs() <= 1)
+            background = similarity.masked_fill(local, float('-inf')).max(dim=-1, keepdim=True).values
+            evidence = torch.tanh((similarity - background) /
+                                  max(float(conditioned_message_temperature), 1e-6))
+            if conditioned_message_mode == 'shifted':
+                evidence = torch.roll(evidence.reshape(B, side, side),
+                                      shifts=(max(1, side // 2), max(1, side // 2)),
+                                      dims=(1, 2)).reshape(B, lens_x)
+            elif conditioned_message_mode != 'target':
+                raise ValueError('unsupported conditioned message mode: {}'.format(
+                    conditioned_message_mode))
+            alpha = float(conditioned_message_alpha)
+            x = x * (1.0 + alpha * evidence.to(dtype=x.dtype).unsqueeze(-1))
+            self.last_conditioned_message_stats = {
+                'mode': conditioned_message_mode,
+                'alpha': alpha,
+                'evidence_mean': float(evidence.mean().detach()),
+                'evidence_std': float(evidence.std().detach()),
+                'peak': peak.detach().cpu(),
+            }
+        else:
+            self.last_conditioned_message_stats = {'mode': 'off'}
 
         if self.mode == 's2t':
             x = torch.cat([x, k], dim=1)

@@ -27,6 +27,8 @@ dataset_dict = dict(
                                        kwargs=dict()),
     lasher_test=DatasetInfo(module=pt % "lasher", class_name="LasHeRDataset", kwargs=dict(split='testingset')),
     rpp_lasher_test=DatasetInfo(module=pt % "lasher", class_name="RPPLasHeRDataset", kwargs=dict(split='testingset')),
+    cplain_lasher_train_eval=DatasetInfo(module=pt % "lasher", class_name="CplainLasHeRTrainDataset", kwargs=dict(split='trainingset')),
+    m1_trace_lasher_train=DatasetInfo(module=pt % "lasher", class_name="TraceLasHeRTrainDataset", kwargs=dict(split='trainingset')),
 )
 
 

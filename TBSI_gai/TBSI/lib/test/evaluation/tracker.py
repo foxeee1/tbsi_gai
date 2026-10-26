@@ -80,7 +80,7 @@ class Tracker:
         params = self.get_parameters()
         # Use parameter file's checkpoint path (already correct), only override
         # when run_id is explicitly provided as an epoch number
-        if run_id is not None:
+        if run_id is not None and not os.environ.get('TBSI_CHECKPOINT_OVERRIDE', ''):
             run_id = int(run_id)
             from lib.test.evaluation.environment import env_settings
             params.checkpoint = os.path.join(env_settings().save_dir, "%s/checkpoints/train/tbsi_track/%s/TBSITrack_ep%04d.pth.tar" %
@@ -158,6 +158,8 @@ class Tracker:
         # Initialize on first frame
         image = frames_gpu[0]
         start_time = time.time()
+        init_info['sequence_name'] = seq.name
+        init_info['frame_num'] = 0
         out = tracker.initialize(image, init_info)
         if out is None:
             out = {}
@@ -328,4 +330,3 @@ class Tracker:
             return decode_img(image_file[0], image_file[1])
         else:
             raise ValueError("type of image_file should be str or list")
-

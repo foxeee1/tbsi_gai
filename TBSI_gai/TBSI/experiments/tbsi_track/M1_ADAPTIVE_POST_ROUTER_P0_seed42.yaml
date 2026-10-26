@@ -1,0 +1,14 @@
+# P0: identity-initialized adaptive post-fusion router.
+# Parent: TBSI_E_MHSA_FULL_4090D_seed42 epoch15. No MHSA changes.
+MODEL:
+  ADAPTIVE_POST_FUSION:
+    ENABLE: True
+    HIDDEN_DIM: 64
+    MAX_RESIDUAL: 0.10
+    FORCE_ZERO: False
+TRAIN:
+  SOT_PRETRAIN: True
+  EPOCH: 1
+  AMP: False
+TEST:
+  EPOCH: 15

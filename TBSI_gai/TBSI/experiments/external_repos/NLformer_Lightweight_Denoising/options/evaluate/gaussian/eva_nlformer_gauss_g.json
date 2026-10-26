@@ -1,0 +1,24 @@
+{
+    "network_type": "NLformer",
+    "load_model": true,
+    "model_path": "pretrained_models/NLformer_gauss_g_blind.pth",
+    "win": 8,
+    "ln_bias": "BiasFree",
+    "dim": 20,
+    "ffn_factor": 2.5,
+    "head_num": [1, 2, 4, 8],
+    "num_blocks": [2, 2, 2, 2],
+    "num_refine_blocks": 2,
+
+    "n_channel": 1,
+    "sigma": 50,
+
+    "sup_type": "sup",
+    "lr": 3e-4,
+    "print_every": 1000,
+    "save_every": 5000,
+    "validate_every": 5000,
+    "num_iters": 500000,
+
+    "save_dir": "save_evaluation/nlformer_g50"
+}

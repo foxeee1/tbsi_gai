@@ -95,6 +95,8 @@ class BaseTrainer:
                         if self._checkpoint_dir:
                             if self.settings.local_rank in [-1, 0]:
                                 self.save_checkpoint()
+                                if getattr(self.settings, 'rolling_checkpoints', False):
+                                    self._remove_older_checkpoints()
             except:
                 print('Training crashed at epoch {}'.format(epoch))
                 if fail_safe:
@@ -144,6 +146,16 @@ class BaseTrainer:
 
         # Now rename to actual checkpoint. os.rename seems to be atomic if files are on same filesystem. Not 100% sure
         os.rename(tmp_file_path, file_path)
+
+    def _remove_older_checkpoints(self):
+        """Keep only the newest completed checkpoint for space-bounded runs."""
+        import glob
+        import os
+        pattern = os.path.join(self._checkpoint_dir, self.settings.project_path,
+                               '{}_ep*.pth.tar'.format(type(self.actor.net).__name__))
+        checkpoints = sorted(glob.glob(pattern))
+        for path in checkpoints[:-1]:
+            os.remove(path)
 
     def load_checkpoint(self, checkpoint = None, fields = None, ignore_fields = None, load_constructor = False):
         """Loads a network checkpoint file.

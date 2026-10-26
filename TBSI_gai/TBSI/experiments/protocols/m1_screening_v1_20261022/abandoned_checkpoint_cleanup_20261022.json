@@ -1,0 +1,98 @@
+{
+  "id": "M1-ABANDONED-CHECKPOINT-CLEANUP-20261022",
+  "created_utc": "2026-10-22T04:47:13Z",
+  "mode": "delete",
+  "count": 12,
+  "bytes": 5333332063,
+  "protected_assets_excluded": [
+    "output/experiments/TBSI_E_MHSA_FULL_4090D_seed42/checkpoints/TBSITrack_ep0015.pth.tar",
+    "output/experiments/v1.0.1-单卡4090D-24G-等效全局128加速/checkpoints/TBSITrack_ep0015.pth.tar"
+  ],
+  "experiment_reports_and_tracking_results_retained": true,
+  "files": [
+    {
+      "path": "output/experiments/M1_AMCM_DR_ADAPTIVE_NOSUP_QUICK15_3EP_20261021/checkpoints/TBSITrack_ep0003.pth.tar",
+      "size_bytes": 452186976,
+      "sha256_before_delete": "15e0bf9b2a489cecd24f1d4994a8b44a535aae2c689eca2ba3e2be237981a1b2",
+      "reason": "DR variant; current branch stopped after no supported sequence-level gain.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_AMCM_DR_FG_MATCH_NOSUP_QUICK15_3EP_20261021/checkpoints/TBSITrack_ep0003.pth.tar",
+      "size_bytes": 452186976,
+      "sha256_before_delete": "b0799ebccae9ef76d4c46f4ada8aaf3f6177655376c892d187bcfba303600b3e",
+      "reason": "DR variant; current branch stopped after no supported sequence-level gain.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_AMCM_DR_MIX50_NOSUP_QUICK15_3EP_20261021/checkpoints/TBSITrack_ep0003.pth.tar",
+      "size_bytes": 452186976,
+      "sha256_before_delete": "6219047e5da0a8a6af5f1abd02e8b528df9f790ac88b08a3e0fd8e1bc15b03d8",
+      "reason": "DR variant; current branch stopped after no supported sequence-level gain.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_CONDITIONED_MSHA_GATE_PROXY_20261021/checkpoints/TBSITrack_ep0003.pth.tar",
+      "size_bytes": 441074961,
+      "sha256_before_delete": "1704b42f0cf0bb8dbb598b85c55a3eec0c303516c9fe7f055d4062a540bfb8c5",
+      "reason": "Early gate candidate not promoted; follow-up strength and margin branches are not supported.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_GATE_MARGIN_OPERATOR_20261022/checkpoints/early_gate_parent_plus_margin_ep0003.pth.tar",
+      "size_bytes": 441078259,
+      "sha256_before_delete": "f9bfd5cb69d3d2b580fb1bec26a762875d6b5ce0d3bf1cab57a93a6d07ab9596",
+      "reason": "Learned margin operator not supported; correction barely changed gate values or CENTER rank.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_GATE_STRENGTH_REPLAY_20261022/checkpoints/M1_parent_state_plus_gate_ep0003.pth.tar",
+      "size_bytes": 441070609,
+      "sha256_before_delete": "40b69b33a52b5c7522c5d936aefd474a28048f50a12ee0ef88e1f0fd0f789861",
+      "reason": "Exploratory strength replay; gains concentrated in one sequence and not promoted.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_GATE_TARGET_MARGIN_QUICK3_20261022/checkpoints/TBSITrack_ep0001.pth.tar",
+      "size_bytes": 441073203,
+      "sha256_before_delete": "8920725af95ef05bff35209e99893652c58241bb30dbd948f57f030d253863d6",
+      "reason": "Rejected early target-margin branch; retain report and per-sequence results.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_GATE_TARGET_MARGIN_QUICK3_20261022/checkpoints/TBSITrack_ep0002.pth.tar",
+      "size_bytes": 441078067,
+      "sha256_before_delete": "c16d7ef0420269fa00b916ee4953996458e91718826b0d33c8c1394a225be684",
+      "reason": "Rejected early target-margin branch; retain report and per-sequence results.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_GATE_TARGET_MARGIN_QUICK3_20261022/checkpoints/TBSITrack_ep0003.pth.tar",
+      "size_bytes": 441082867,
+      "sha256_before_delete": "26f8679f8571462973fc49c2de8f25a432b609397fdccfc29a6b65d8a41ca1f9",
+      "reason": "Rejected early target-margin branch; retain report and per-sequence results.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_EARLY_MARGIN_FIXED_STATE_EVIDENCE_20261022/noop_margin_control.pth.tar",
+      "size_bytes": 441078259,
+      "sha256_before_delete": "4c676534ec832675da28721478c83619bf12a825b329b1dc1588f82a19cd1beb",
+      "reason": "Redundant diagnostic no-op control; M1 parent checkpoint is separately protected.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_MSHA_DER_OVERFIT16_20261022/checkpoints/TBSITrack_ep0005.pth.tar",
+      "size_bytes": 444611087,
+      "sha256_before_delete": "ee82ee6e95dfbafe0aba9a514017e01793d9d53386e411c0bb822b590976b89a",
+      "reason": "DER learnability screen inconclusive; the subsequent quick screen rejected this branch.",
+      "status": "DELETED"
+    },
+    {
+      "path": "output/experiments/M1_MSHA_DER_QUICK3_20261022/checkpoints/TBSITrack_ep0003.pth.tar",
+      "size_bytes": 444623823,
+      "sha256_before_delete": "a8172e9a13fb8c2d90179bc1cb87b3f9868c5ec11eb9507ea42be29e4acac139",
+      "reason": "DER quick branch not supported; report states stop current DER training branch.",
+      "status": "DELETED"
+    }
+  ]
+}

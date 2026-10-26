@@ -1,0 +1,7 @@
+DATA:
+  BATCH_SIZE: 256
+  DATA_PATH: /mnt/public2/hrz/imagenet
+MODEL:
+  TYPE: h_wfm
+  NAME: h_wfm_tiny
+  DROP_PATH_RATE: 0.2

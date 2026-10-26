@@ -153,10 +153,23 @@ class CASTBlock(nn.Module):
         if use_attn_gate:
             self.attn_gate = nn.Parameter(torch.tensor(1.0))
 
-    def forward(self, x, mask=None, quality_mask=None):
+    def forward(self, x, mask=None, quality_mask=None, attention_scale=1.0,
+                template_fg_mask=None, conditioned_message_alpha=0.0,
+                conditioned_message_mode='off', conditioned_message_temperature=0.25):
+        """Scale only the attention message for an opt-in diagnostic probe."""
         if self.use_attn_gate:
-            x = x + self.drop_path(self.attn_gate * self.attn_reshape(self.norm1(x), mask, quality_mask=quality_mask))
+            x = x + self.drop_path(self.attn_gate * attention_scale * self.attn_reshape(
+                self.norm1(x), mask, quality_mask=quality_mask,
+                template_fg_mask=template_fg_mask,
+                conditioned_message_alpha=conditioned_message_alpha,
+                conditioned_message_mode=conditioned_message_mode,
+                conditioned_message_temperature=conditioned_message_temperature))
         else:
-            x = x + self.drop_path(self.attn_reshape(self.norm1(x), mask, quality_mask=quality_mask))
+            x = x + self.drop_path(attention_scale * self.attn_reshape(
+                self.norm1(x), mask, quality_mask=quality_mask,
+                template_fg_mask=template_fg_mask,
+                conditioned_message_alpha=conditioned_message_alpha,
+                conditioned_message_mode=conditioned_message_mode,
+                conditioned_message_temperature=conditioned_message_temperature))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x

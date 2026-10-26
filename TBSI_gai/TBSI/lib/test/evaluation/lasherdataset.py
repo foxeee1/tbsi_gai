@@ -2,10 +2,19 @@ import numpy as np
 from lib.test.evaluation.data import Sequence, BaseDataset, SequenceList
 from lib.test.utils.load_text import load_text
 import os
+import re
 
 
 # Sequences to skip due to corrupted/incomplete annotations
 SKIP_SEQUENCES = {'advancedredcup', 'cameraman_1202', 'mirroratleft'}
+
+
+def _numeric_frame_key(filename):
+    stem = os.path.splitext(filename)[0]
+    match = re.match(r'^[^0-9]*(\d+)', stem)
+    if match is None:
+        raise ValueError('LasHeR frame name has no leading numeric index: {}'.format(filename))
+    return int(match.group(1)), filename
 
 
 class LasHeRDataset(BaseDataset):
@@ -23,6 +32,8 @@ class LasHeRDataset(BaseDataset):
         # Split can be test, val, or ltrval (a validation split consisting of videos from the official train set)
         if split == 'testingset' or split == 'val':
             self.base_path = os.path.join(self.env_settings.lasher_path, split)
+        elif split == 'trainingset':
+            self.base_path = os.path.join(self.env_settings.lasher_path, 'trainingset')
         else:
             self.base_path = os.path.join(self.env_settings.lasher_path, 'train')
 
@@ -43,9 +54,9 @@ class LasHeRDataset(BaseDataset):
         frames_path_i = '{}/{}/infrared'.format(self.base_path, sequence_name)
         frames_path_v = '{}/{}/visible'.format(self.base_path, sequence_name)
         frame_list_i = [frame for frame in os.listdir(frames_path_i) if frame.endswith(".jpg")]
-        frame_list_i.sort(key=lambda f: int(f[1:-4]))
+        frame_list_i.sort(key=_numeric_frame_key)
         frame_list_v = [frame for frame in os.listdir(frames_path_v) if frame.endswith(".jpg")]
-        frame_list_v.sort(key=lambda f: int(f[1:-4]))
+        frame_list_v.sort(key=_numeric_frame_key)
         frames_list_i = [os.path.join(frames_path_i, frame) for frame in frame_list_i]
         frames_list_v = [os.path.join(frames_path_v, frame) for frame in frame_list_v]
         frames_list = [frames_list_v, frames_list_i]
@@ -75,3 +86,22 @@ class RPPLasHeRDataset(LasHeRDataset):
         if not sequence_list_file:
             raise RuntimeError('TBSI_RPP_TEST_LIST is required for rpp_lasher_test')
         super().__init__(split=split, sequence_list_file=sequence_list_file)
+
+
+class CplainLasHeRTrainDataset(LasHeRDataset):
+    """G0-Cplain diagnostic sequences from the LasHeR training split."""
+    def __init__(self, split='trainingset'):
+        sequence_list_file = os.environ.get('TBSI_CPLAIN_EVAL_LIST')
+        if not sequence_list_file:
+            raise RuntimeError('TBSI_CPLAIN_EVAL_LIST is required for cplain_lasher_train_eval')
+        super().__init__(split=split, sequence_list_file=sequence_list_file)
+
+
+class TraceLasHeRTrainDataset(LasHeRDataset):
+    """Fixed train-side sequences used for frozen-M1 temporal trace export."""
+    def __init__(self, split='trainingset'):
+        sequence_list_file = os.environ.get('TBSI_TRACE_TRAIN_LIST')
+        if not sequence_list_file:
+            raise RuntimeError('TBSI_TRACE_TRAIN_LIST is required for m1_trace_lasher_train')
+        super().__init__(split=split, sequence_list_file=sequence_list_file)
+

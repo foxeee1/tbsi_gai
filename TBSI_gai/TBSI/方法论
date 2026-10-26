@@ -1,0 +1,101 @@
+下面这套流程把“序列筛选、因果诊断、短训、全量确认”分开。每一步都要有明确的进入和停止条件。
+
+### 阶段 0：固定基线与实验身份
+
+1. 固定受保护 M1：checkpoint epoch15、原配置与官方评测口径。
+2. 每个候选建新的实验 ID、配置、输出目录；不覆盖 M1 或旧实验。
+3. 代码行为变更前保存快照；新功能必须可关闭。
+4. 每次记录代码快照、config/checkpoint 哈希、数据 manifest 哈希、seed、训练步数、环境、命令和完整分析输出。
+5. 受保护 M1 仍是 parent；更换运行条件就要标明不再是严格同条件比较。
+
+**停止条件：** 配置、权重、评测口径或数据成员无法追溯时，不进入候选筛选。
+
+### 阶段 1：先定义问题事件，再看候选效果
+
+1. 在 train-side cohort 中按固定 baseline 和规则提取事件。
+2. 仅保留 GT 有效、目标可见性可核查、GT 位于 crop 内的事件。
+3. 同一事件记录目标和至少一个局部 hard-background 的竞争，而不是仅记录整帧 AUC 或特征范数。
+4. 每条序列最多一个主事件；再选一个同序列较正常的 matched-good 帧作为对照。
+5. 按序列分成 calibration、development、locked holdout，禁止同一序列跨集合。
+6. 每次查看或调参都登记该序列已曝光，不能再叫“新鲜独立 cohort”。
+
+**停止条件：** 没有可复现的“目标证据存在但读出/融合失配”事件，就不能宣称要修正目标/硬背景排序；返回问题定义，而不是找新模块。
+
+### 阶段 2：确定目标证据在哪一段首次变化
+
+在同一 template、crop、state、frame 下，只采集或干预一个位置：
+
+1. block 输出；
+2. TBSI loc3、loc6、loc9；
+3. `tbsi_fuse_search` 输入与输出；
+4. CENTER 原始 score、Hann 后 score、GT cell 与 top-1 cell 解码。
+
+对每个位置记录 RGB、TIR、融合后的 \(m^{l,m}\)、GT rank、最强 hard-background rank、峰值 margin 和 CENTER 输出。用相同坐标定义贯穿各层；不要把 cosine 特征 margin、L2 距离和 CENTER logit 混成一个指标。
+
+然后做可逆、单变量干预：关闭或替换一个 block/TBSI/fusion 位置，同时保留非目标位置对照。只有干预能改变目标/背景排序并传到 CENTER，才支持该位置是可操作原因。已有资产已经提醒：特征几何改变不等于目标选择性改变；MSHA 干预的效果也有明显异质性。[信息流案例分析](/root/autodl-tmp/TBSI_gai/TBSI/experiments/reports/m1_lowauc_information_flow_cases_20261020.md) [MSHA 低 AUC 诊断](/root/autodl-tmp/TBSI_gai/TBSI/experiments/reports/m1_lowauc20_msha_foreground_cross_20261022.md)
+
+**停止条件：** 若特征 margin 变了但 CENTER rank/top-1 不变，不能继续放大残差或堆融合模块；要查它与读出的接口。
+
+### 阶段 3：校准代理流程能不能筛选候选
+
+在新 proxy 用于新想法前，先拿历史候选回测代理协议：
+
+1. 先审计历史候选是否有严格可比的 proxy/full 结果：同一 parent、初始化、训练数据口径、训练进度、seed 规则、checkpoint 和评测脚本。
+2. 挑过去涨、跌、无效的代表想法；Cdiag 可以作为一个已知 proxy/full 背离案例，但不能单独校准代理。
+3. 对每个候选计算 proxy 与 full 的配对差值，并比较候选排序的 Spearman 相关、方向一致率和按序列 bootstrap 区间。
+4. 如果历史结果口径不匹配，就不能硬算相关性；先把它们标为不可比，另选有配对资产的候选。
+5. 样本数量少时，相关性只作探索性校准，报告不确定性，不能用几个点证明 proxy 已可信。
+
+**准入条件：** 代理排序若与已有 full 排序反复背离，或区间太宽而无法区分方向，就先不用该代理筛新 idea；继续做机制诊断或补可比回测。
+
+### 阶段 4：模块进入训练前的合同检查
+
+对一个明确假设只改一个变量，例如“融合前可测到的目标证据被 MSHA cross-message 改弱”，而不是把不确定性、残差、注意力、额外 loss 一次加齐。
+
+依次核查：
+
+1. feature gate 关闭时与 M1 forward parity；
+2. zero-gate 是严格 no-op；
+3. 输入输出 shape/channel、保存加载正确；
+4. 单 batch 梯度到达预期参数；
+5. 冻结 parent 参数和 tracker state 没有意外变化；
+6. 固定小样本的可拟合性成立；
+7. 固定状态下目标 rank/margin 有朝预期方向变化，非目标位置对照没有同样变化。
+
+**停止条件：** shape、梯度、状态或 parity 合同不过，修复合同；不以“再换一个模块”来处理实现问题。
+
+### 阶段 5：训练预算和学习率按比例缩放
+
+全量 M1 是 15 epochs、每 epoch `59,904` samples。新子集若为约 18%，在保持模型、分辨率、batch、优化器和样本生成语义不变时，优先按实际 optimizer steps 将训练预算设为全量预算的约 18%，而不是保留 15 个全数据 epoch 的步数。
+
+- 在配置中记录全量和 proxy 的 optimizer step 总数。
+- warmup 和 decay 按**总 optimizer steps 的相同比例**换算。
+- 不通过额外重复采样把子集训练步数补回全量；若确实重复采样，单独记录总 exposure 和重复次数。
+- 代理快训若低于 18% 全量步数，应标成更短的机制筛选，不能与已校准的 18% 协议混称。
+- 背骨、输入分辨率、优化器、损失及训练入口保持一致；否则这次对照同时改变了多个变量。
+
+### 阶段 6：候选筛选与锁定评测
+
+1. 先完成机制和合同门，再用 proxy train 短训。
+2. candidate 与 control 使用相同数据 manifest、初始化、optimizer steps、checkpoint epoch 和随机种子；建议至少用配对 seed 做筛选，最终候选再增加独立 seed。
+3. 用预先锁定的评测清单做 full-244；结果按序列配对，不能只报宏平均。
+4. 同时检查机制指标与跟踪指标：GT/hard-background margin、GT rank、CENTER 选峰、full-244 AUC、逐序列退化及困难属性。
+5. 效果只出现在少数最难序列、且其余序列抵消时，结论是“特定子群候选”，不是总体改善。
+6. proxy 增、full 降时，先定位 full 的负收益是否来自 proxy 未覆盖的属性/目标尺度/运动档；再比学习曲线的步数与形状，最后才判断 idea 本身是否无效。
+
+**晋级条件：** 机制结果方向正确、评测收益不由一两条序列独占、没有明显未覆盖子群的系统性退化；代理校准也不能显示候选排序经常背离 full 结果。任一项不满足，标成“不支持”或“尚未区分”，不直接扩到正式全量训练。
+
+### 阶段 7：最终确认和论文边界
+
+1. 入选候选与直接 parent 进行匹配的 full training；最终方法至少使用多个 seed，不用单 seed 代表稳定性。
+2. M1 官方 full-244 做完整确认；报告所有官方指标、逐序列配对结果和属性/证据类别分层。
+3. 因 test set 已被反复探索，论文要明确它的历史曝光；更强泛化结论须另有未被用于选择的外部 benchmark。
+4. 模板更新和跨帧恢复暂时不纳入该模块的核心 claim，除非单独实验覆盖。
+5. 论文贡献限定为实际证据支持的范围，例如“在已存在目标证据的 crop 内，降低某类融合造成的 hard-background 排序损失”，而不是“解决 M1 漂移”或“解决 RGB-T 跟踪融合”。
+
+## 建议最终固定的两个集合
+
+- **论文案例**：现阶段用 `ab_pingpongball2`、`1strowleftboyturning`、`leftunderbasket`、`basketball849` 做 M1 历史案例图的候选，再按固定状态、GT 可见性和 hard-background 证据逐个确认。它们是已曝光 test 案例，只能描述 M1 失败，不能用来选或验证新模块。
+- **快速筛选**：重新构建 LasHeR train-side 约 176 条的比例保持型 manifest；现有 RPP-v1 176 条保留作困难压力集。候选评测默认 full-244，不缩小测试；若算力确实不允许，RPP 60 条只作筛选并明确它过采样了稀有属性，之后仍须 full-244 确认。
+
+这一轮最关键的动作不是再选一个模块，而是先冻结新 manifest 和事件判据，再对历史 proxy/full 结果做一次**可比性审计**。目前本地证据足以指出 RPP-v1 更像压力集，也足以制定新的比例保持型 proxy；但不足以证明任何现有快速筛选协议已可靠预测 full-244 排名。

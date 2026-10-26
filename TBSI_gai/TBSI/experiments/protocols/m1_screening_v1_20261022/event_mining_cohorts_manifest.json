@@ -1,0 +1,31 @@
+{
+  "id": "M1-EVENT-MINING-COHORTS-V1-20261022",
+  "parent": "Protected M1 TBSI_E_MHSA_FULL_4090D_seed42 epoch15",
+  "candidate_train_manifest": "quick_train_manifest.json",
+  "candidate_train_count": 176,
+  "candidate_evaluation_cohorts": {
+    "calibration": {
+      "count": 48,
+      "sequence_list_sha256": "af81eeacc1db375218a075991a0c799e0e01022c60d2790f141c96bfbb8091a8"
+    },
+    "development": {
+      "count": 24,
+      "sequence_list_sha256": "e60d37706de052b6b88c4116e3e98702bebe7474a9bf5d0e9e735c9a3913719c"
+    },
+    "locked_holdout": {
+      "count": 24,
+      "sequence_list_sha256": "a80f4b5f7779ee0a2dcbb2469708e74569d2732c68b21f8a021a2778af7b1267"
+    }
+  },
+  "total_candidate_heldout_sequences": 96,
+  "official_train_population": 977,
+  "sequence_overlap_train_vs_cohorts": 0,
+  "sequence_overlap_between_cohorts": 0,
+  "baseline_exposure": "M1 saw all official train sequences during baseline training. This split protects the new candidate correction from sequence-level training overlap, but not parent pretraining exposure.",
+  "event_mining_rule_to_apply_after_baseline_replay": "First run of at least 3 consecutive valid frames with IoU < 0.5 and GT crop coverage >= 99.9%; use the first event per sequence and retain the immediately preceding frame. Separately record all valid-frame target/background evidence; do not select events by candidate improvement.",
+  "split_roles": {
+    "calibration": "Choose measurement definitions and debug extraction contracts only.",
+    "development": "Test one frozen causal hypothesis and choose at most one candidate version.",
+    "locked_holdout": "Evaluate the selected candidate once after all design choices are frozen."
+  }
+}

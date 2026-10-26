@@ -1,0 +1,14 @@
+{
+  "analysis": "offline sensitivity summary; no model run",
+  "source": "/root/autodl-tmp/TBSI_gai/TBSI/output/experiments/M1_MSHA_FCSV_R_FIXED28_20261026/center_results.csv",
+  "source_sha256": "ca528dc00902cfc18c871019b67591b329f4cce942461363f06141d3b366e48a",
+  "n_events": 28,
+  "correct_minus_shifted_mean_iou": -3.199983141428545e-05,
+  "correct_minus_native_excluding_largest_positive_event": -0.0017675698715674444,
+  "excluded_event": [
+    "whiteshoesleftbottle-gai",
+    22
+  ],
+  "exclusion_is_posthoc": true,
+  "scope": "Not AUC; not a causal attribution; see audit report"
+}

@@ -1,0 +1,30 @@
+{
+  "dataset": "LasHeR testingset",
+  "purpose": "exploratory screening only; all sequences were previously observed",
+  "source": "M1_FULL244_SEQUENCE_AUDIT_20261009/per_sequence.csv",
+  "cohorts": {
+    "simple_top_m1_auc": ["darkcarturn", "silvercarturn", "boyruninsnow"],
+    "moderate_near_auc_60": ["1strowrightdrillmaster", "bluegirlbiketurn", "umbrellawillbefold"],
+    "original_m1_low_auc": ["ab_bikeoccluded", "3rdfatboy", "leftfarboycomingpicktheball"],
+    "additional_difficult": ["leftunderbasket", "basketball849", "boyunder2baskets", "whitesuvturn"]
+  },
+  "m1_auc": {
+    "darkcarturn": 91.1565,
+    "silvercarturn": 89.7418,
+    "boyruninsnow": 89.4035,
+    "1strowrightdrillmaster": 60.0309,
+    "bluegirlbiketurn": 59.5453,
+    "umbrellawillbefold": 60.5250,
+    "ab_bikeoccluded": 8.9303,
+    "3rdfatboy": 18.5297,
+    "leftfarboycomingpicktheball": 19.4906,
+    "leftunderbasket": 10.2337,
+    "basketball849": 4.0215,
+    "boyunder2baskets": 10.7512,
+    "whitesuvturn": 12.1655
+  },
+  "sequence_count": 13,
+  "seed": 42,
+  "checkpoint_epoch": 5,
+  "precision": "FP32"
+}

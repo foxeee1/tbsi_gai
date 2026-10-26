@@ -1,0 +1,17 @@
+{
+  "protocol_id": "M1-RESEARCH-SCREENING-PROTOCOL-V1-20261022",
+  "candidate_train": 176,
+  "candidate_train_fraction": 0.18014329580348004,
+  "event_cohorts": {
+    "calibration": 48,
+    "development": 24,
+    "locked_holdout": 24
+  },
+  "full_eval": 244,
+  "paper_retrospective_cases": 4,
+  "candidate_event_overlap": 0,
+  "max_official_attribute_count_deviation": 1.01637666325486,
+  "historical_proxy_calibration": "NOT-CALIBRATED; only two directionally comparable candidates and contracts differ",
+  "abandoned_checkpoint_cleanup_bytes": 5333332063,
+  "protocol_integrity_manifest_sha256": "eb2729beac82ccba587cc47399328aa8a096495893fd7511f22d9802612bdd77"
+}

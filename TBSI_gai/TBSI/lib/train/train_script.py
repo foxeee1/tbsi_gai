@@ -1,5 +1,7 @@
 import os
+import random
 import torch
+import numpy as np
 # loss function related
 from lib.utils.box_ops import giou_loss
 from torch.nn.functional import l1_loss
@@ -65,6 +67,15 @@ def run(settings):
     # wrap networks to distributed one
     net.cuda()
 
+    matched_seed = getattr(cfg.TRAIN, 'MATCHED_SEED', None)
+    if matched_seed is not None:
+        random.seed(int(matched_seed))
+        np.random.seed(int(matched_seed))
+        torch.manual_seed(int(matched_seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(matched_seed))
+        print('Matched post-initialization RNG streams at seed {}'.format(int(matched_seed)))
+
     # ===== Global optimization settings =====
     torch.backends.cudnn.benchmark = True
     # This helper was introduced after the historical PyTorch 1.9 setup.
@@ -104,6 +115,8 @@ def run(settings):
     else:
         settings.device = torch.device("cuda:0")
     settings.deep_sup = getattr(cfg.TRAIN, "DEEP_SUPERVISION", False)
+    settings.strip_score_only = getattr(cfg.TRAIN, "STRIP_SCORE_ONLY", False)
+    settings.adaptive_post_router_only = getattr(cfg.TRAIN, "ADAPTIVE_POST_ROUTER_ONLY", False)
     settings.distill = getattr(cfg.TRAIN, "DISTILL", False)
     settings.distill_loss_type = getattr(cfg.TRAIN, "DISTILL_LOSS_TYPE", "KL")
     # Loss functions and Actors
