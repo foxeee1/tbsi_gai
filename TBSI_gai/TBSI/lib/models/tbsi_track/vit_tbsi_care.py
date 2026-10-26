@@ -18,11 +18,8 @@ Hacked together by / Copyright 2021 Ross Wightman
 Modified by Botao Ye
 """
 import math
-import logging
 import os
 from functools import partial
-from collections import OrderedDict
-from copy import deepcopy
 
 import torch
 import torch.nn as nn

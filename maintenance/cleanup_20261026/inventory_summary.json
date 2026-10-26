@@ -1,0 +1,24 @@
+{
+  "baseline_commit": "c0f1aff98792d604110a1e006a7d2cef4394734d",
+  "code_items": 36,
+  "code_actions": {
+    "REMOVED_UNUSED_STDLIB_IMPORT": 6,
+    "CANDIDATE_REMOVE_WITH_CALLERS_NOT_EXECUTED": 5,
+    "HOLD_RESEARCH_ASSET_NOT_DELETE": 1,
+    "CANDIDATE_EXTRACT_TO_LEGACY_NOT_EXECUTED": 6,
+    "CANDIDATE_LEGACY_MODULE_NOT_EXECUTED": 18
+  },
+  "reports": 339,
+  "report_actions": {
+    "KEEP_HISTORICAL_EVIDENCE": 295,
+    "REFERENCE_ONLY_NOT_CURRENT_INSTRUCTION": 18,
+    "HISTORICAL_MAINTENANCE_RECORD": 15,
+    "ARCHIVE_ACTION_PLAN_KEEP_EVIDENCE": 7,
+    "KEEP_CURRENT_ENTRY": 4
+  },
+  "report_exact_duplicate_groups": 0,
+  "configs": 149,
+  "model_tests_run": false,
+  "training_started": false,
+  "code_line_numbers": "All ranges refer to baseline commit, not shifted working tree lines"
+}

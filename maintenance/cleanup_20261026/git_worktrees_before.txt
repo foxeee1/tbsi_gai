@@ -1,0 +1,8 @@
+worktree /root/autodl-tmp
+HEAD 09f3d57c0761b01de1fa3aa29ff296c20ea5e9e9
+branch refs/heads/master
+
+worktree /tmp/tbsi_m1_09f3d57
+HEAD 09f3d57c0761b01de1fa3aa29ff296c20ea5e9e9
+detached
+

@@ -1,5 +1,8 @@
 # Early gate 后继 Value 细化：跨领域文献与算子候选（2026-10-26）
 
+> **历史方案，非当前执行计划（2026-10-26 清理标记）：** 本文原始数据、引用和推导保留；其中候选优先级、准入条件和下一步命令不再作为当前指令。当前范围见项目 `README_当前研究.md`；本标记不表示所有假设已被证伪，也不批准新训练。清理前原文见 Git `c0f1aff`。
+
+
 ## 结论
 
 **建议保留 Early-conditioned MSHA gate 作为研究 parent，并把唯一主候选收敛为“Early-conditioned Low-rank Cross-layer Value Retention”（ECLVR，早期条件低秩跨层 Value 保留）。** 它借鉴语言模型的 Value Residual Learning：将早层的 Value 信息带到深层；再将 Early gate 的三项证据用于选择每个模板 token、每个 attention head 的低秩 Value 子空间。它仍只作用于原 MSHA 跨模态 Value 来源，不改变 Q/K、attention logits、同模态路径或 tracker 更新状态。

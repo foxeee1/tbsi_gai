@@ -1,5 +1,8 @@
 # M1 Early-Gate / DCVR-v2 Value 源重分配设计（2026-10-26）
 
+> **历史方案，非当前执行计划（2026-10-26 清理标记）：** 本文原始数据、引用和推导保留；其中候选优先级、准入条件和下一步命令不再作为当前指令。当前范围见项目 `README_当前研究.md`；本标记不表示所有假设已被证伪，也不批准新训练。清理前原文见 Git `c0f1aff`。
+
+
 > **后续审计更正（同日）：** 上轮“来源机制已被否定/停止整条 Value 内容路线”的结论撤回。现有运行保留 Early gate，且 alpha 非零时硬删除零前景来源，alpha0 则特判恒等；尚缺 mask-only 对照。query/boundary CSV 测量接收输出，未测量来源 Value 贡献，因此不能由 r≈0.025 推出来源重分配无效。下方原始数字保留，旧强归因以本更正为准。当前状态为 `SOURCE-MECHANISM-INCONCLUSIVE / CONTRACT-REPAIR-FIRST / NO-TRAINING`。详见 [算子建议与审计更正](m1_early_gate_value_interaction_recommendation_20261026.md)。
 
 > **公式修订：** 当前 FCSV-R 用“前景来源分布重分配”替代上一版的 `κ·d` token 缩放。它在前景来源先验上守恒系数质量，避免把 gate 均值误写成 Value 消息守恒；实际消息范数仍须实测。以下公式与实验判据为当前版本。
