@@ -61,6 +61,8 @@ TBSI_gai/TBSI/tools/*analysis*.py
 **/smoke_*.py
 **/*smoke*.py
 **/*_audit*.py
+**/check_*_contract.py
+**/check_*_real_batch.py
 
 # Local output snapshots and independent upstream checkouts are preserved on
 # disk, separately from the maintained project source tree.
