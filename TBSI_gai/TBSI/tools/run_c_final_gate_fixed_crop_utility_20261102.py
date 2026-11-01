@@ -30,7 +30,7 @@ DEFAULT_CHECKPOINT = ROOT / "output/experiments/EG_C_EARLY_LR_DROP_U936_FULL15_F
 DEFAULT_CONFIG = "EG_C_EARLY_LR_DROP_U936_SOT_S42_20261101"
 DEFAULT_CASES = ROOT / "experiments/early_gate_closed_loop_20261026/c_final_gate_utility_20261102/cases.json"
 DEFAULT_OUTPUT = ROOT / "output/experiments/EG_C_FINAL_GATE_FIXED_CROP_UTILITY_20261102"
-SAVED_PREDICTIONS = ROOT / "output/experiments/EG_C_EARLY_LR_DROP_U936_FULL15_FULL244_S42_20261101/C/full244"
+DEFAULT_SAVED_PREDICTIONS = Path("/root/autodl-tmp/TBSI_gai/TBSI/output/experiments/EG_C_EARLY_LR_DROP_U936_FULL15_FULL244_S42_20261101/C/full244")
 
 
 def sha256_file(path):
@@ -96,12 +96,14 @@ def main():
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--cases", default=str(DEFAULT_CASES))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--saved-predictions", default=str(DEFAULT_SAVED_PREDICTIONS))
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     checkpoint = Path(args.checkpoint).resolve()
     cases_path = Path(args.cases).resolve()
     output = Path(args.output).resolve()
+    saved_predictions = Path(args.saved_predictions).resolve()
     if not str(ROOT.resolve()).startswith("/root/autodl-tmp/"):
         raise RuntimeError("project is outside the authorized data disk")
     if "/autodl-fs/" in str(Path(__file__).resolve()) or "/autodl-fs/" in str(output):
@@ -186,7 +188,7 @@ def main():
             target = int(case["frame"])
             if target >= len(seq.frames[0]) or target >= len(seq.ground_truth_rect):
                 raise RuntimeError("target frame outside sequence: " + seq.name)
-            result_file = SAVED_PREDICTIONS / (seq.name + ".txt")
+            result_file = saved_predictions / (seq.name + ".txt")
             if not result_file.is_file():
                 raise RuntimeError("saved C prediction missing: " + str(result_file))
             saved = np.loadtxt(result_file, ndmin=2)
