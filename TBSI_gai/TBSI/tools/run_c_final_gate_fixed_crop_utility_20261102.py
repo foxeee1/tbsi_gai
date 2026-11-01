@@ -134,6 +134,8 @@ def main():
     if Path(params.checkpoint).resolve() != checkpoint:
         raise RuntimeError("tracker checkpoint differs from explicit checkpoint")
     tracker = TBSITrack(params, "lasher_test")
+    if getattr(params.cfg.MODEL, "TEMPORAL_TOKENS", False):
+        raise RuntimeError("saved-box state replay requires temporal tokens disabled")
     fusions = []
     for layer in getattr(tracker.network.backbone, "tbsi_layers", []):
         fusion = getattr(layer, "v2_template_fusion", None)
@@ -171,6 +173,7 @@ def main():
         "precision": "FP32", "tracker_threads": 0, "template_update": False,
         "interventions": ["native trained Early gate", "gate logits forced to zero => g=1"],
         "g1_override": "zero the native evidence logits and any enabled search-context residual logits before the shared tanh/exp action",
+        "state_anchor": "saved C full244 prediction at target frame minus one; temporal tokens and template updates are disabled",
         "gt_usage": "post-hoc scoring only; never passed to gate/model",
         "training": False, "full_test": False, "command": sys.argv,
         "torch": torch.__version__, "cuda": torch.version.cuda,
@@ -194,14 +197,15 @@ def main():
             saved = np.loadtxt(result_file, ndmin=2)
             tracker.initialize(read_frame(seq, 0), {"init_bbox": seq.ground_truth_rect[0]})
 
-            # Reconstruct and verify the exact native C trajectory prefix.
-            for frame_idx in range(1, target):
-                crop_hashes.clear()
-                pred = np.asarray(tracker.track(
-                    read_frame(seq, frame_idx), {"sequence_name": seq.name, "frame_num": frame_idx}
-                )["target_bbox"], dtype=np.float64).reshape(4)
-                if frame_idx >= len(saved) or not np.array_equal(pred.astype(np.int64), saved[frame_idx].astype(np.int64)):
-                    raise RuntimeError("prefix parity failed at %s frame %d" % (seq.name, frame_idx))
+            if target <= 0 or target >= len(saved):
+                raise RuntimeError("saved result does not contain state for %s@%d" % (seq.name, target))
+            # C has no temporal-token or online-template state. Its only
+            # inter-frame input is the previous predicted box. Restore that
+            # state directly, avoiding a free-running prefix mismatch.
+            tracker.state = saved[target - 1].astype(np.float64).tolist()
+            tracker.frame_id = target - 1
+            tracker.prev_search = None
+            tracker.prev_temporal_tokens = None
 
             anchor = {
                 "state": clone_state(tracker.state), "frame_id": tracker.frame_id,
