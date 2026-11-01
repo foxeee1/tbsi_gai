@@ -90,6 +90,25 @@ def center_error(a, b):
     return float(np.linalg.norm(ac - bc))
 
 
+def gate_summary(fusions):
+    summaries = []
+    for layer_id, fusion in fusions:
+        values = fusion.last_gate_log_gain
+        if values is None:
+            raise RuntimeError("gate utility capture missing at layer %d" % layer_id)
+        values = values.detach().float().cpu()
+        summaries.append({
+            "layer_id": int(layer_id),
+            "log_gain_mean_by_source": values.mean(dim=(0, 1)).tolist(),
+            "log_gain_std_by_source": values.std(dim=(0, 1), unbiased=False).tolist(),
+            "log_gain_min_by_source": values.amin(dim=(0, 1)).tolist(),
+            "log_gain_max_by_source": values.amax(dim=(0, 1)).tolist(),
+            "fraction_suppressed_by_source": (values < 0).float().mean(dim=(0, 1)).tolist(),
+            "fraction_boosted_by_source": (values > 0).float().mean(dim=(0, 1)).tolist(),
+        })
+    return summaries
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT))
@@ -137,10 +156,11 @@ def main():
     if getattr(params.cfg.MODEL, "TEMPORAL_TOKENS", False):
         raise RuntimeError("saved-box state replay requires temporal tokens disabled")
     fusions = []
-    for layer in getattr(tracker.network.backbone, "tbsi_layers", []):
+    for layer_id, layer in enumerate(getattr(tracker.network.backbone, "tbsi_layers", [])):
         fusion = getattr(layer, "v2_template_fusion", None)
         if fusion is not None and getattr(fusion, "early_conditioned_cross_gate", False):
-            fusions.append(fusion)
+            fusion.capture_gate_utility = True
+            fusions.append((layer_id, fusion))
     if not fusions:
         raise RuntimeError("native Early gate fusion layers were not found")
 
@@ -226,7 +246,7 @@ def main():
                 crop_hashes.clear()
                 originals = []
                 if mode == "g1":
-                    for fusion in fusions:
+                    for _, fusion in fusions:
                         originals.append((fusion.early_gate, fusion.early_gate.forward))
                         fusion.early_gate.forward = lambda evidence: evidence.new_zeros(
                             (evidence.shape[0], evidence.shape[1], 2))
@@ -249,6 +269,7 @@ def main():
                 branches.append({
                     "mode": mode, "input_state_sha256": anchor_hash,
                     "frame_sha256": frame_hash, "search_crop_sha256": crop_hashes[0],
+                    "gate_log_gain": gate_summary(fusions),
                     "prediction": pred.tolist(),
                     "gt": np.asarray(seq.ground_truth_rect[target], dtype=np.float64).tolist(),
                     "iou": box_iou(pred, seq.ground_truth_rect[target]),
