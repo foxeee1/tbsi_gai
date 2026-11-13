@@ -18,8 +18,10 @@ Hacked together by / Copyright 2021 Ross Wightman
 Modified by Botao Ye
 """
 import math
-import os
+import logging
 from functools import partial
+from collections import OrderedDict
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -36,11 +38,12 @@ from lib.models.tbsi_track.base_backbone import BaseBackbone
 from lib.models.tbsi_track.utils import combine_tokens, recover_tokens
 
 from lib.models.layers.tbsi_layer import TBSILayer
-from lib.models.layers.pvl_adapter import PVLAdapter
-from lib.models.layers.early_search_residual import EarlySearchResidual
-from lib.models.layers.early_utility_router import EarlyUtilityRouter
-from lib.models.layers.post_tbsi_cross_modal_residual import PostTBSICrossModalResidual
-from lib.models.layers.local_cross_modal_correspondence import LocalCrossModalCorrespondence
+from lib.models.layers.early_source_evidence import reset_early_source_evidence
+from lib.models.layers.structured_spatial_evidence import reset_structured_spatial_evidence
+from lib.models.layers.dual_message_modulator import reset_dual_message_modulator
+from lib.models.layers.fine_grained_unified_allocator import reset_fine_grained_unified_allocator
+from lib.models.layers.receiver_cross_write import reset_receiver_cross_write
+from lib.models.layers.cross_mass_preserving_relation import reset_cross_mass_preserving_relation
 
 
 class Attention(nn.Module):
@@ -122,63 +125,31 @@ class VisionTransformerTBSI(BaseBackbone):
                  da_in_layer=False, use_attn_gate=False,
                  use_checkpoint=False, use_smsa=False, use_smsa_rgb=None, use_smsa_tir=None,
                  smsa_alpha=1.3, smsa_fp32=True, fusion_mode='legacy',
-                 bridge_token_pruner_enable=False, bridge_token_pruner_layer_ids=None,
-                 bridge_token_pruner_cfg=None,
-                 template_expert_mode='off', template_expert_loc=None,
-                 template_expert_count=4, template_expert_slots=4,
-                 template_expert_hidden=4, cfvi_mode='off',
-                 cfvi_lambda_init=0.001, cfvi_gate_hidden=64, cfvi_loc=None,
-                 cfvi_band_mask=None, cfvi_band_renorm=True,
-                 freq_exchange_mode='off', freq_exchange_loc=None,
-                 freq_exchange_diagnostics_path=None,
-                 message_freq_refine_mode='off', message_freq_refine_loc=None,
-                 freq_relation_mode='off', freq_relation_loc=None,
-                 freq_relation_hidden=64, freq_relation_max_bias=0.5,
-                 freq_relation_calibration='off', freq_relation_topk=8,
-                 freq_relation_clip=3.0, freq_relation_eps=1e-6,
-                 early_search_residual_enable=False, early_search_residual_early_block=2,
-                 early_search_residual_late_block=9, early_search_residual_force_zero=False,
-                 early_search_residual_use_scsu=False, early_search_residual_scsu_k1=3,
-                 early_search_residual_scsu_k2=5,
-                 post_tbsi_residual_enable=False, post_tbsi_residual_mode='spatial',
-                 post_tbsi_residual_block=5, post_tbsi_residual_hidden_dim=192,
-                 post_tbsi_residual_heads=4, post_tbsi_residual_force_zero=False,
-                 pvl_enable=False, pvl_position='template_loc6',
-                 pvl_loc=6, pvl_adapter_dim=64, pvl_beta=2.35,
                  early_conditioned_cross_gate=False, early_gate_hidden=32,
-                 early_target_margin_gate=False, early_margin_hidden=16,
-                 early_margin_hard_negative_k=4,
-                 early_direct_margin_gate=False, early_direct_margin_rho=0.0,
-                 early_direct_margin_temperature=0.25,
-                 early_direct_margin_trainable=False,
-                 early_template_value_reconstruction=False,
-                 early_template_value_rank=8,
-                 early_template_value_max_delta=0.10,
-                 discriminative_evidence_router=False, der_score_dim=64,
-                 der_hidden_dim=8, early_utility_router_enable=False,
-                 early_utility_descriptor_dim=32, early_utility_hidden_dim=64,
-                 msha_role_pair_bias_enable=False, msha_role_pair_bias_loc=9,
-                 early_search_relation_bias_enable=False, early_search_relation_bias_loc=9,
-                 early_search_relation_dim=32, early_search_relation_temperature=0.07,
-                 early_search_relation_max_bias=0.5,
-                 search_conditioned_t2s_mode='off',
-                 search_conditioned_t2s_loc=None,
-                 search_conditioned_t2s_rank=64,
-                 search_conditioned_t2s_max_delta=0.10,
-                 search_conditioned_t2s_temperature=0.07,
-                 search_conditioned_t2s_competition_topk=4,
-                 search_conditioned_t2s_router_temperature=None,
-                 search_conditioned_t2s_content_strength=0.0,
-                 search_conditioned_t2s_content_match_temperature=0.2,
-                 search_conditioned_t2s_content_prior_floor=0.05,
-                 search_conditioned_t2s_content_search_factor=4.0,
-                 search_conditioned_t2s_content_neighborhood='object',
-                 local_cross_modal_correspondence_enable=False,
-                 local_cross_modal_correspondence_block=2,
-                 local_cross_modal_correspondence_hidden_dim=96,
-                 local_cross_modal_correspondence_relevance_dim=64,
-                 local_cross_modal_correspondence_max_delta=0.05,
-                 ):
+                 early_gate_source_mode='dynamic',
+                 early_gate_search_context_mode='off',
+                 early_gate_search_context_layer_aligned=False,
+                 early_gate_center_source_log_gain=False,
+                 early_source_evidence=False, early_source_evidence_hidden=24,
+                 early_source_evidence_delta=0.25, early_source_evidence_topk=4,
+                 structured_spatial_evidence=False, structured_evidence_hidden=8,
+                 dual_message_mode='off', dual_message_max_delta=0.1,
+                 fu_enabled=False, fu_rank=8, fu_max_relation=0.5,
+                 fu_max_rejection=0.5, receiver_cross_write=False,
+                 receiver_write_max_delta=0.1,
+                 msha_message_normalization='off',
+                 early_gate_value_modulation=True,
+                 early_gate_conservative_allocation=False,
+                 early_gate_evidence_gradient_isolation=False,
+                 cross_mass_preserving_relation=False,
+                 cross_relation_max_bias=0.1,
+                 query_source_write=False, query_source_write_hidden=32,
+                 query_source_write_max_delta=0.15,
+                 mass_redist_enable=False, mass_redist_mode="pair",
+                 early_target_support_mode="max",
+                 early_target_support_temperature=0.1,
+                 spatial_pair_mode="off", spatial_pair_temperature=0.1,
+                 spatial_pair_max_bias=1.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -223,39 +194,9 @@ class VisionTransformerTBSI(BaseBackbone):
                 use_checkpoint=use_checkpoint)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
-        self.early_search_residual = None
-        self.early_search_residual_early_block = int(early_search_residual_early_block)
-        self.early_search_residual_late_block = int(early_search_residual_late_block)
-        if early_search_residual_enable:
-            self.early_search_residual = EarlySearchResidual(
-                dim=embed_dim, force_zero=early_search_residual_force_zero,
-                use_scsu=early_search_residual_use_scsu,
-                scsu_k1=early_search_residual_scsu_k1,
-                scsu_k2=early_search_residual_scsu_k2)
-        self.post_tbsi_residual = None
-        self.post_tbsi_residual_block = int(post_tbsi_residual_block)
-        if post_tbsi_residual_enable:
-            self.post_tbsi_residual = PostTBSICrossModalResidual(
-                dim=embed_dim, mode=post_tbsi_residual_mode,
-                hidden_dim=post_tbsi_residual_hidden_dim,
-                num_heads=post_tbsi_residual_heads,
-                force_zero=post_tbsi_residual_force_zero)
-        self.local_cross_modal_correspondence = None
-        self.local_cross_modal_correspondence_block = int(local_cross_modal_correspondence_block)
-        if local_cross_modal_correspondence_enable:
-            self.local_cross_modal_correspondence = LocalCrossModalCorrespondence(
-                dim=embed_dim,
-                hidden_dim=local_cross_modal_correspondence_hidden_dim,
-                relevance_dim=local_cross_modal_correspondence_relevance_dim,
-                max_delta=local_cross_modal_correspondence_max_delta)
 
         # Template-bridged search region interaction (TBSI)
         self.tbsi_loc = tbsi_loc
-        self.early_utility_router_enable = bool(early_utility_router_enable)
-        self.early_utility_router = (
-            EarlyUtilityRouter(embed_dim, early_utility_descriptor_dim,
-                               early_utility_hidden_dim)
-            if self.early_utility_router_enable else None)
         self.tbsi_fusion = fusion_mode
         self.tbsi_drop_path = tbsi_drop_path
         self.tbsi_layers = nn.ModuleList()
@@ -263,8 +204,6 @@ class VisionTransformerTBSI(BaseBackbone):
         self.use_checkpoint = use_checkpoint
         if self.tbsi_loc is not None and type(self.tbsi_loc) == list:
             for i in range(len(self.tbsi_loc)):
-                use_pruner = (bridge_token_pruner_enable and
-                              i in (bridge_token_pruner_layer_ids or []))
                 self.tbsi_layers.append(TBSILayer(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias, drop=drop_rate, attn_drop=attn_drop_rate,
                     drop_path=self.tbsi_drop_path[i], norm_layer=norm_layer, act_layer=act_layer,
@@ -272,82 +211,63 @@ class VisionTransformerTBSI(BaseBackbone):
                     use_smsa=use_smsa, use_smsa_rgb=use_smsa_rgb, use_smsa_tir=use_smsa_tir,
                     smsa_alpha=smsa_alpha, smsa_fp32=smsa_fp32,
                     fusion_mode=fusion_mode,
-                    use_bridge_token_pruner=use_pruner,
-                    pruner_cfg=bridge_token_pruner_cfg,
-                    template_expert_mode=(template_expert_mode
-                                          if self.tbsi_loc[i] in (template_expert_loc or [])
-                                          else 'off'),
-                    template_expert_count=template_expert_count,
-                    template_expert_slots=template_expert_slots,
-                    template_expert_hidden=template_expert_hidden,
-                    cfvi_mode=(cfvi_mode if not cfvi_loc or self.tbsi_loc[i] in cfvi_loc else 'off'),
-                    cfvi_lambda_init=cfvi_lambda_init,
-                    cfvi_gate_hidden=cfvi_gate_hidden,
-                    cfvi_band_mask=cfvi_band_mask,
-                    cfvi_band_renorm=cfvi_band_renorm,
-                    freq_exchange_mode=(freq_exchange_mode
-                                        if not freq_exchange_loc or self.tbsi_loc[i] in freq_exchange_loc
-                                        else 'off'),
-                    freq_exchange_diagnostics_path=freq_exchange_diagnostics_path,
-                    message_freq_refine_mode=(message_freq_refine_mode
-                        if self.tbsi_loc[i] in (message_freq_refine_loc or []) else 'off'),
-                    freq_relation_mode=(freq_relation_mode
-                        if self.tbsi_loc[i] in (freq_relation_loc or []) else 'off'),
-                    freq_relation_hidden=freq_relation_hidden,
-                    freq_relation_max_bias=freq_relation_max_bias,
-                    freq_relation_calibration=freq_relation_calibration,
-                    freq_relation_topk=freq_relation_topk,
-                    freq_relation_clip=freq_relation_clip,
-                    freq_relation_eps=freq_relation_eps,
-                    pvl_adapter_dim=(pvl_adapter_dim if pvl_enable and
-                                     pvl_position == 'template_loc6' and
-                                     self.tbsi_loc[i] == pvl_loc else 0),
-                    pvl_beta=pvl_beta,
                     early_conditioned_cross_gate=early_conditioned_cross_gate,
                     early_gate_hidden=early_gate_hidden,
-                    early_target_margin_gate=early_target_margin_gate,
-                    early_margin_hidden=early_margin_hidden,
-                    early_margin_hard_negative_k=early_margin_hard_negative_k,
-                    early_direct_margin_gate=early_direct_margin_gate,
-                    early_direct_margin_rho=early_direct_margin_rho,
-                    early_direct_margin_temperature=early_direct_margin_temperature,
-                    early_direct_margin_trainable=early_direct_margin_trainable,
-                    early_template_value_reconstruction=early_template_value_reconstruction,
-                    early_template_value_rank=early_template_value_rank,
-                    early_template_value_max_delta=early_template_value_max_delta,
-                    discriminative_evidence_router=discriminative_evidence_router,
-                    der_score_dim=der_score_dim, der_hidden_dim=der_hidden_dim,
-                    role_pair_bias=(msha_role_pair_bias_enable and
-                                    self.tbsi_loc[i] == msha_role_pair_bias_loc),
-                    early_search_relation_bias=(early_search_relation_bias_enable and
-                                                self.tbsi_loc[i] == early_search_relation_bias_loc),
-                    early_search_relation_dim=early_search_relation_dim,
-                    early_search_relation_temperature=early_search_relation_temperature,
-                    early_search_relation_max_bias=early_search_relation_max_bias,
-                    search_conditioned_t2s_mode=search_conditioned_t2s_mode,
-                    search_conditioned_t2s_loc=(self.tbsi_loc[i] in
-                                                (search_conditioned_t2s_loc or [])),
-                    search_conditioned_t2s_rank=search_conditioned_t2s_rank,
-                    search_conditioned_t2s_max_delta=search_conditioned_t2s_max_delta,
-                    search_conditioned_t2s_temperature=search_conditioned_t2s_temperature,
-                    search_conditioned_t2s_competition_topk=search_conditioned_t2s_competition_topk,
-                    search_conditioned_t2s_router_temperature=search_conditioned_t2s_router_temperature,
-                    search_conditioned_t2s_content_strength=search_conditioned_t2s_content_strength,
-                    search_conditioned_t2s_content_match_temperature=search_conditioned_t2s_content_match_temperature,
-                    search_conditioned_t2s_content_prior_floor=search_conditioned_t2s_content_prior_floor,
-                    search_conditioned_t2s_content_search_factor=search_conditioned_t2s_content_search_factor,
-                    search_conditioned_t2s_content_neighborhood=search_conditioned_t2s_content_neighborhood,
-                    ))
-                self.tbsi_layers[-1].path_effect_layer_index = i
+                    early_gate_source_mode=early_gate_source_mode,
+                    early_gate_search_context_mode=early_gate_search_context_mode,
+                    early_gate_search_context_layer_aligned=early_gate_search_context_layer_aligned,
+                    early_gate_center_source_log_gain=early_gate_center_source_log_gain,
+                    spatial_pair_mode=spatial_pair_mode,
+                    spatial_pair_temperature=spatial_pair_temperature,
+                    spatial_pair_max_bias=spatial_pair_max_bias,
+                    early_target_support_mode=early_target_support_mode,
+                    early_target_support_temperature=early_target_support_temperature,
+                    early_source_evidence=early_source_evidence,
+                    early_source_evidence_hidden=early_source_evidence_hidden,
+                    early_source_evidence_delta=early_source_evidence_delta,
+                    early_source_evidence_topk=early_source_evidence_topk,
+                    structured_spatial_evidence=structured_spatial_evidence and i == 0,
+                    structured_evidence_hidden=structured_evidence_hidden,
+                    dual_message_mode=dual_message_mode if i == 0 else 'off',
+                    dual_message_max_delta=dual_message_max_delta,
+                    msha_message_normalization=(msha_message_normalization
+                                                 if i == 0 else 'off'),
+                    fu_enabled=fu_enabled, fu_rank=fu_rank,
+                    fu_max_relation=fu_max_relation,
+                    fu_max_rejection=fu_max_rejection,
+                    receiver_cross_write=receiver_cross_write,
+                    receiver_write_max_delta=receiver_write_max_delta,
+                    early_gate_value_modulation=early_gate_value_modulation,
+                    early_gate_conservative_allocation=early_gate_conservative_allocation,
+                    early_gate_evidence_gradient_isolation=early_gate_evidence_gradient_isolation,
+                    cross_mass_preserving_relation=cross_mass_preserving_relation,
+                    cross_relation_max_bias=cross_relation_max_bias,
+                    query_source_write=query_source_write,
+                    query_source_write_hidden=query_source_write_hidden,
+                    query_source_write_max_delta=query_source_write_max_delta,
+                    mass_redist_enable=mass_redist_enable,
+                    mass_redist_mode=mass_redist_mode))
 
         self.init_weights(weight_init)
-        if self.local_cross_modal_correspondence is not None:
-            self.local_cross_modal_correspondence.reset_output()
+        # Generic ViT initialization overwrites child Linear initialization.
+        # Restore identity for this optional evidence-only branch afterwards.
+        reset_early_source_evidence(self)
+        reset_structured_spatial_evidence(self)
+        reset_dual_message_modulator(self)
+        reset_fine_grained_unified_allocator(self)
+        reset_receiver_cross_write(self)
+        from lib.models.layers.query_source_conditional_write import reset_query_source_conditional_write
+        reset_query_source_conditional_write(self)
+        from lib.models.layers.receiver_source_mass_reallocator import reset_receiver_source_mass_reallocator
+        reset_receiver_source_mass_reallocator(self)
+        reset_cross_mass_preserving_relation(self)
+        from lib.models.layers.early_gate_search_context import reset_early_gate_search_context
+        reset_early_gate_search_context(self)
 
     def forward_features(self, z, x, temporal_tokens=None, template_fg_masks=None,
-                         diagnostic=False, diagnostic_early_block=2,
-                         diagnostic_late_block=9, diagnostic_tbsi_index=0,
-                         diagnostic_post_block=5):
+                         template_boxes=None):
+        if template_fg_masks is not None:
+            raise ValueError('retained TBSI-E has no foreground-mask input operator')
         B, H, W = x[0].shape[0], x[0].shape[2], x[0].shape[3]
 
         x_v = self.patch_embed(x[0])
@@ -381,81 +301,22 @@ class VisionTransformerTBSI(BaseBackbone):
         lens_x = self.pos_embed_x.shape[1]
         
         tbsi_index = 0
-        diagnostic_features = {} if diagnostic else None
-        der_score_maps = []
-        early_gate_stats = []
-        early_rgb_for_residual = None
-        early_tir_for_residual = None
-        early_template_rgb_for_gate = None
-        early_template_tir_for_gate = None
-        early_search_rgb_for_gate = None
-        early_search_tir_for_gate = None
-        early_utility_logits = None
+        early_context = None
         for i, blk in enumerate(self.blocks):
             x_v = blk(x_v)
             x_i = blk(x_i)
             if i == 2:
-                early_template_rgb_for_gate = x_v[:, :lens_z, :]
-                early_template_tir_for_gate = x_i[:, :lens_z, :]
-                early_search_rgb_for_gate = x_v[:, lens_z:, :]
-                early_search_tir_for_gate = x_i[:, lens_z:, :]
-                if self.early_utility_router is not None:
-                    if template_fg_masks is None:
-                        raise ValueError('early utility router requires template foreground masks')
-                    early_utility_logits = self.early_utility_router(
-                        (early_template_rgb_for_gate, early_template_tir_for_gate,
-                         early_search_rgb_for_gate, early_search_tir_for_gate),
-                         template_fg_masks)
-            if (self.local_cross_modal_correspondence is not None and
-                    i == self.local_cross_modal_correspondence_block):
-                x_v[:, lens_z:, :], x_i[:, lens_z:, :] = self.local_cross_modal_correspondence(
-                    x_v[:, lens_z:, :], x_i[:, lens_z:, :],
-                    x_v[:, :lens_z, :], x_i[:, :lens_z, :], template_fg_masks)
-            if self.early_search_residual is not None and i == self.early_search_residual_early_block:
-                early_rgb_for_residual = x_v[:, lens_z:, :]
-                early_tir_for_residual = x_i[:, lens_z:, :]
-            if diagnostic and i == diagnostic_early_block:
-                diagnostic_features['early_rgb'] = x_v[:, lens_z:, :].detach()
-                diagnostic_features['early_tir'] = x_i[:, lens_z:, :].detach()
-            if diagnostic and i == diagnostic_post_block:
-                diagnostic_features['post_block_rgb'] = x_v[:, lens_z:, :].detach()
-                diagnostic_features['post_block_tir'] = x_i[:, lens_z:, :].detach()
-            if self.post_tbsi_residual is not None and i == self.post_tbsi_residual_block:
-                x_v[:, lens_z:, :], x_i[:, lens_z:, :] = self.post_tbsi_residual(
-                    x_v[:, lens_z:, :], x_i[:, lens_z:, :])
+                early_context = (x_v[:, :lens_z], x_i[:, :lens_z],
+                                 x_v[:, lens_z:lens_z + lens_x],
+                                 x_i[:, lens_z:lens_z + lens_x])
             if self.tbsi_loc is not None and i in self.tbsi_loc:
-                if diagnostic and i == diagnostic_late_block:
-                    diagnostic_features['late_input_rgb'] = x_v[:, lens_z:, :].detach()
-                    diagnostic_features['late_input_tir'] = x_i[:, lens_z:, :].detach()
-                if (self.early_search_residual is not None and
-                        i == self.early_search_residual_late_block):
-                    if early_rgb_for_residual is None or early_tir_for_residual is None:
-                        raise RuntimeError('early residual late block precedes early capture')
-                    late_rgb = x_v[:, lens_z:, :]
-                    late_tir = x_i[:, lens_z:, :]
-                    x_v[:, lens_z:, :], x_i[:, lens_z:, :] = self.early_search_residual(
-                        late_rgb, late_tir, early_rgb_for_residual, early_tir_for_residual)
+                fusion_context = (x_v[:, :lens_z], x_i[:, :lens_z],
+                                  x_v[:, lens_z:lens_z + lens_x],
+                                  x_i[:, lens_z:lens_z + lens_x])
                 x_v, x_i = self.tbsi_layers[tbsi_index](
                     x_v, x_i, lens_z, temporal_tokens=temporal_tokens,
-                    template_fg_masks=template_fg_masks,
-                    early_context=(early_template_rgb_for_gate,
-                                   early_template_tir_for_gate,
-                                   early_search_rgb_for_gate,
-                                   early_search_tir_for_gate),
-                    early_utility_logits=early_utility_logits)
-                der_scores = getattr(
-                    self.tbsi_layers[tbsi_index].v2_template_fusion,
-                    'last_der_scores', None)
-                gate_stats = getattr(
-                    self.tbsi_layers[tbsi_index].v2_template_fusion,
-                    'last_early_gate_stats', None)
-                if gate_stats is not None:
-                    early_gate_stats.append(gate_stats)
-                if der_scores is not None:
-                    der_score_maps.append(der_scores)
-                if diagnostic and tbsi_index == diagnostic_tbsi_index:
-                    diagnostic_features['post_tbsi_rgb'] = x_v[:, lens_z:, :].detach()
-                    diagnostic_features['post_tbsi_tir'] = x_i[:, lens_z:, :].detach()
+                    early_context=early_context, template_boxes=template_boxes,
+                    fusion_context=fusion_context)
                 tbsi_index += 1
 
         x_v = recover_tokens(x_v, lens_z, lens_x, mode=self.cat_mode)
@@ -463,29 +324,6 @@ class VisionTransformerTBSI(BaseBackbone):
         x = torch.cat([x_v, x_i], dim=1)
         
         aux_dict = {"attn": None}
-        if early_utility_logits is not None:
-            aux_dict['early_utility_logits'] = early_utility_logits
-        # Optional sparse cross-modal fusion receives the earliest available
-        # paired tokens without changing the default M1 output contract.
-        if os.environ.get('TBSI_SPARSE_CROSS_MODE', 'off').lower() != 'off':
-            if early_search_rgb_for_gate is None or early_search_tir_for_gate is None:
-                raise RuntimeError('sparse cross route requires block02 search features')
-            aux_dict['early_sparse_context'] = (
-                early_template_rgb_for_gate.detach(),
-                early_template_tir_for_gate.detach(),
-                early_search_rgb_for_gate.detach(),
-                early_search_tir_for_gate.detach())
-            self._last_early_sparse_context = aux_dict['early_sparse_context']
-        else:
-            self._last_early_sparse_context = None
-        if der_score_maps:
-            aux_dict['der_score_maps'] = der_score_maps
-        if early_gate_stats:
-            aux_dict['early_gate_stats'] = early_gate_stats
-        if diagnostic:
-            diagnostic_features['late_output_rgb'] = x_v[:, lens_z:, :].detach()
-            diagnostic_features['late_output_tir'] = x_i[:, lens_z:, :].detach()
-            aux_dict['diagnostic_features'] = diagnostic_features
         return self.norm(x), aux_dict
 
     def get_smsa_stats(self):
@@ -494,6 +332,13 @@ class VisionTransformerTBSI(BaseBackbone):
         if not values:
             return None
         return {key: sum(value[key] for value in values) / len(values) for key in values[0]}
+
+    def get_structured_support_logits(self):
+        values = [layer.v2_template_fusion.structured_support_logits
+                  for layer in self.tbsi_layers
+                  if hasattr(layer, 'v2_template_fusion') and
+                  getattr(layer.v2_template_fusion, 'structured_support_logits', None) is not None]
+        return values
 
     def get_tsms_attention(self):
         """Return training-graph SMSA attentions with their TBSI locations.
@@ -506,8 +351,6 @@ class VisionTransformerTBSI(BaseBackbone):
             location = self.tbsi_loc[index] if index < len(self.tbsi_loc) else index
             for name, block in (('RGB2F', layer.ca_s2t_i2f),
                                 ('TIR2F', layer.ca_s2t_v2f)):
-                if block is None:
-                    continue
                 attention = getattr(block.attn_reshape,
                                      'last_smsa_attention_for_loss', None)
                 if attention is not None:
@@ -521,8 +364,6 @@ class VisionTransformerTBSI(BaseBackbone):
             location = self.tbsi_loc[index] if index < len(self.tbsi_loc) else index
             for name, block in (('RGB2F', layer.ca_s2t_i2f),
                                 ('TIR2F', layer.ca_s2t_v2f)):
-                if block is None:
-                    continue
                 attention = getattr(block.attn_reshape, 'last_smsa_attention', None)
                 if attention is not None:
                     values.append((location, name, attention.detach()))
@@ -531,10 +372,13 @@ class VisionTransformerTBSI(BaseBackbone):
     def clear_tsms_attention(self):
         """Release the previous training graph after backward has started."""
         for layer in self.tbsi_layers:
-            for block in (layer.ca_s2t_i2f, layer.ca_s2t_v2f):
-                if block is None:
-                    continue
-                block.attn_reshape.last_smsa_attention_for_loss = None
+            # TBSI-E has no legacy search-to-template blocks. Disabled TSMS
+            # cleanup is a no-op there; do not invent attention state or touch
+            # the active fusion path.
+            for name in ('ca_s2t_i2f', 'ca_s2t_v2f'):
+                block = getattr(layer, name, None)
+                if block is not None:
+                    block.attn_reshape.last_smsa_attention_for_loss = None
 
     def init_weights(self, mode=''):
         assert mode in ('jax', 'jax_nlhb', 'nlhb', '')
@@ -547,25 +391,7 @@ class VisionTransformerTBSI(BaseBackbone):
             named_apply(partial(_init_vit_weights, head_bias=head_bias, jax_impl=True), self)
         else:
             trunc_normal_(self.cls_token, std=.02)
-            # PVL 参数在自己的初始化范围内，不消耗 M1 主干的 RNG 序列。
-            def initialize_without_pvl(module):
-                for child in module.children():
-                    if isinstance(child, PVLAdapter):
-                        continue
-                    initialize_without_pvl(child)
-                _init_vit_weights(module)
-
-            initialize_without_pvl(self)
-        for module in self.modules():
-            if module.__class__.__name__ == 'MessageAdapter':
-                nn.init.zeros_(module.fc2.weight)
-                nn.init.zeros_(module.fc2.bias)
-            if module.__class__.__name__ == 'EarlyTargetMarginGate':
-                nn.init.zeros_(module.net[-1].weight)
-                nn.init.zeros_(module.net[-1].bias)
-            if isinstance(module, EarlyUtilityRouter):
-                nn.init.zeros_(module.predictor[-1].weight)
-                nn.init.zeros_(module.predictor[-1].bias)
+            self.apply(_init_vit_weights)
 
     def _init_weights(self, m):
         # this fn left here for compat with downstream users
