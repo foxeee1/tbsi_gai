@@ -38,6 +38,12 @@ from lib.models.tbsi_track.base_backbone import BaseBackbone
 from lib.models.tbsi_track.utils import combine_tokens, recover_tokens
 
 from lib.models.layers.tbsi_layer import TBSILayer
+from lib.models.layers.early_source_evidence import reset_early_source_evidence
+from lib.models.layers.structured_spatial_evidence import reset_structured_spatial_evidence
+from lib.models.layers.dual_message_modulator import reset_dual_message_modulator
+from lib.models.layers.fine_grained_unified_allocator import reset_fine_grained_unified_allocator
+from lib.models.layers.receiver_cross_write import reset_receiver_cross_write
+from lib.models.layers.cross_mass_preserving_relation import reset_cross_mass_preserving_relation
 
 
 class Attention(nn.Module):
@@ -118,7 +124,32 @@ class VisionTransformerTBSI(BaseBackbone):
                  tbsi_loc=None, tbsi_drop_path=None,
                  da_in_layer=False, use_attn_gate=False,
                  use_checkpoint=False, use_smsa=False, use_smsa_rgb=None, use_smsa_tir=None,
-                 smsa_alpha=1.3, smsa_fp32=True, fusion_mode='legacy'):
+                 smsa_alpha=1.3, smsa_fp32=True, fusion_mode='legacy',
+                 early_conditioned_cross_gate=False, early_gate_hidden=32,
+                 early_gate_source_mode='dynamic',
+                 early_gate_search_context_mode='off',
+                 early_gate_search_context_layer_aligned=False,
+                 early_gate_center_source_log_gain=False,
+                 early_source_evidence=False, early_source_evidence_hidden=24,
+                 early_source_evidence_delta=0.25, early_source_evidence_topk=4,
+                 structured_spatial_evidence=False, structured_evidence_hidden=8,
+                 dual_message_mode='off', dual_message_max_delta=0.1,
+                 fu_enabled=False, fu_rank=8, fu_max_relation=0.5,
+                 fu_max_rejection=0.5, receiver_cross_write=False,
+                 receiver_write_max_delta=0.1,
+                 msha_message_normalization='off',
+                 early_gate_value_modulation=True,
+                 early_gate_conservative_allocation=False,
+                 early_gate_evidence_gradient_isolation=False,
+                 cross_mass_preserving_relation=False,
+                 cross_relation_max_bias=0.1,
+                 query_source_write=False, query_source_write_hidden=32,
+                 query_source_write_max_delta=0.15,
+                 mass_redist_enable=False, mass_redist_mode="pair",
+                 early_target_support_mode="max",
+                 early_target_support_temperature=0.1,
+                 spatial_pair_mode="off", spatial_pair_temperature=0.1,
+                 spatial_pair_max_bias=1.0):
         """
         Args:
             img_size (int, tuple): input image size
@@ -179,11 +210,64 @@ class VisionTransformerTBSI(BaseBackbone):
                     use_degradation=da_in_layer, use_attn_gate=use_attn_gate,
                     use_smsa=use_smsa, use_smsa_rgb=use_smsa_rgb, use_smsa_tir=use_smsa_tir,
                     smsa_alpha=smsa_alpha, smsa_fp32=smsa_fp32,
-                    fusion_mode=fusion_mode))
+                    fusion_mode=fusion_mode,
+                    early_conditioned_cross_gate=early_conditioned_cross_gate,
+                    early_gate_hidden=early_gate_hidden,
+                    early_gate_source_mode=early_gate_source_mode,
+                    early_gate_search_context_mode=early_gate_search_context_mode,
+                    early_gate_search_context_layer_aligned=early_gate_search_context_layer_aligned,
+                    early_gate_center_source_log_gain=early_gate_center_source_log_gain,
+                    spatial_pair_mode=spatial_pair_mode,
+                    spatial_pair_temperature=spatial_pair_temperature,
+                    spatial_pair_max_bias=spatial_pair_max_bias,
+                    early_target_support_mode=early_target_support_mode,
+                    early_target_support_temperature=early_target_support_temperature,
+                    early_source_evidence=early_source_evidence,
+                    early_source_evidence_hidden=early_source_evidence_hidden,
+                    early_source_evidence_delta=early_source_evidence_delta,
+                    early_source_evidence_topk=early_source_evidence_topk,
+                    structured_spatial_evidence=structured_spatial_evidence and i == 0,
+                    structured_evidence_hidden=structured_evidence_hidden,
+                    dual_message_mode=dual_message_mode if i == 0 else 'off',
+                    dual_message_max_delta=dual_message_max_delta,
+                    msha_message_normalization=(msha_message_normalization
+                                                 if i == 0 else 'off'),
+                    fu_enabled=fu_enabled, fu_rank=fu_rank,
+                    fu_max_relation=fu_max_relation,
+                    fu_max_rejection=fu_max_rejection,
+                    receiver_cross_write=receiver_cross_write,
+                    receiver_write_max_delta=receiver_write_max_delta,
+                    early_gate_value_modulation=early_gate_value_modulation,
+                    early_gate_conservative_allocation=early_gate_conservative_allocation,
+                    early_gate_evidence_gradient_isolation=early_gate_evidence_gradient_isolation,
+                    cross_mass_preserving_relation=cross_mass_preserving_relation,
+                    cross_relation_max_bias=cross_relation_max_bias,
+                    query_source_write=query_source_write,
+                    query_source_write_hidden=query_source_write_hidden,
+                    query_source_write_max_delta=query_source_write_max_delta,
+                    mass_redist_enable=mass_redist_enable,
+                    mass_redist_mode=mass_redist_mode))
 
         self.init_weights(weight_init)
+        # Generic ViT initialization overwrites child Linear initialization.
+        # Restore identity for this optional evidence-only branch afterwards.
+        reset_early_source_evidence(self)
+        reset_structured_spatial_evidence(self)
+        reset_dual_message_modulator(self)
+        reset_fine_grained_unified_allocator(self)
+        reset_receiver_cross_write(self)
+        from lib.models.layers.query_source_conditional_write import reset_query_source_conditional_write
+        reset_query_source_conditional_write(self)
+        from lib.models.layers.receiver_source_mass_reallocator import reset_receiver_source_mass_reallocator
+        reset_receiver_source_mass_reallocator(self)
+        reset_cross_mass_preserving_relation(self)
+        from lib.models.layers.early_gate_search_context import reset_early_gate_search_context
+        reset_early_gate_search_context(self)
 
-    def forward_features(self, z, x, temporal_tokens=None):
+    def forward_features(self, z, x, temporal_tokens=None, template_fg_masks=None,
+                         template_boxes=None):
+        if template_fg_masks is not None:
+            raise ValueError('retained TBSI-E has no foreground-mask input operator')
         B, H, W = x[0].shape[0], x[0].shape[2], x[0].shape[3]
 
         x_v = self.patch_embed(x[0])
@@ -217,11 +301,22 @@ class VisionTransformerTBSI(BaseBackbone):
         lens_x = self.pos_embed_x.shape[1]
         
         tbsi_index = 0
+        early_context = None
         for i, blk in enumerate(self.blocks):
             x_v = blk(x_v)
             x_i = blk(x_i)
+            if i == 2:
+                early_context = (x_v[:, :lens_z], x_i[:, :lens_z],
+                                 x_v[:, lens_z:lens_z + lens_x],
+                                 x_i[:, lens_z:lens_z + lens_x])
             if self.tbsi_loc is not None and i in self.tbsi_loc:
-                x_v, x_i = self.tbsi_layers[tbsi_index](x_v, x_i, lens_z, temporal_tokens=temporal_tokens)
+                fusion_context = (x_v[:, :lens_z], x_i[:, :lens_z],
+                                  x_v[:, lens_z:lens_z + lens_x],
+                                  x_i[:, lens_z:lens_z + lens_x])
+                x_v, x_i = self.tbsi_layers[tbsi_index](
+                    x_v, x_i, lens_z, temporal_tokens=temporal_tokens,
+                    early_context=early_context, template_boxes=template_boxes,
+                    fusion_context=fusion_context)
                 tbsi_index += 1
 
         x_v = recover_tokens(x_v, lens_z, lens_x, mode=self.cat_mode)
@@ -237,6 +332,13 @@ class VisionTransformerTBSI(BaseBackbone):
         if not values:
             return None
         return {key: sum(value[key] for value in values) / len(values) for key in values[0]}
+
+    def get_structured_support_logits(self):
+        values = [layer.v2_template_fusion.structured_support_logits
+                  for layer in self.tbsi_layers
+                  if hasattr(layer, 'v2_template_fusion') and
+                  getattr(layer.v2_template_fusion, 'structured_support_logits', None) is not None]
+        return values
 
     def get_tsms_attention(self):
         """Return training-graph SMSA attentions with their TBSI locations.
@@ -270,8 +372,13 @@ class VisionTransformerTBSI(BaseBackbone):
     def clear_tsms_attention(self):
         """Release the previous training graph after backward has started."""
         for layer in self.tbsi_layers:
-            for block in (layer.ca_s2t_i2f, layer.ca_s2t_v2f):
-                block.attn_reshape.last_smsa_attention_for_loss = None
+            # TBSI-E has no legacy search-to-template blocks. Disabled TSMS
+            # cleanup is a no-op there; do not invent attention state or touch
+            # the active fusion path.
+            for name in ('ca_s2t_i2f', 'ca_s2t_v2f'):
+                block = getattr(layer, name, None)
+                if block is not None:
+                    block.attn_reshape.last_smsa_attention_for_loss = None
 
     def init_weights(self, mode=''):
         assert mode in ('jax', 'jax_nlhb', 'nlhb', '')

@@ -1,0 +1,107 @@
+% Replace only the manuscript's \section{方法} with this section.
+\section{方法}
+\subsection{整体结构}
+本文以 B0 组的跟踪骨干、双模态模板交互和定位头为基础，研究跨模态模板消息在当前接收位置上的来源分配。B0 的模板注意力根据查询--键相似度确定来源权重，但在给定接收 token 后，来源之间的权重比例并未显式利用接收端当前自消息及 C 分支的搜索条件进行再判断。为此，本文采用两步式消息调制：首先由 C 分支根据搜索上下文产生来源级门控，随后由质量守恒的接收端--来源重分配（Mass-Redist）在每个接收位置内部重新分配跨模态注意力质量。前一步回答“当前场景下某来源总体应贡献多少”，后一步回答“在既定跨模态消息预算内，哪些来源更适合当前接收位置”。
+
+设模态 $m,n\in\{\R,\T\}$ 且 $m\ne n$。在融合层 $\ell$、注意力头 $h$ 中，接收模态 $n$ 的模板 token 数为 $N_q$，来源模态 $m$ 的模板 token 数为 $N_s$。两模态模板拼接后按 B0 的注意力投影计算 $Q,K,V$。注意力矩阵沿来源轴归一化为
+\begin{equation}
+ A_{\ell,h}^{m\to n}
+ =\softmax\!\left(\frac{Q_{\ell,h}^{n}(K_{\ell,h}^{m})^{\T}}
+ {\sqrt{d_h}}\right),
+ \qquad A_{\ell,h,i,j}^{m\to n}\ge 0,
+ \quad \sum_j A_{\ell,h,i,j}^{m\to n}=1,
+ \label{eq:b0-attn}
+\end{equation}
+其中 $i$ 表示接收 token，$j$ 表示来源 token。B0 的跨模态消息为 $\sum_j A_{i,j}V_{m,j}$。本文保留该注意力关系、Value 投影、同模态消息、输出投影及残差路径；新增调制仅作用于跨模态来源消息。
+
+\subsection{C：搜索条件化的来源门控}
+仅由模板间相似度形成的 $A_{i,j}$ 不直接反映当前帧搜索区域是否支持来源 token $j$。C 分支为每个来源模板 token 检索对侧搜索内容，并结合模板--搜索匹配摘要生成来源门控。记早期骨干输出为 $Z_m^e,X_m^e$，对来源位置 $j$ 构造三通道证据
+\begin{equation}
+ e_j=\left[s_{\R,j},s_{\T,j},
+ \cos(Z_{\R,j}^e,Z_{\T,j}^e)\right],
+ \qquad s_{u,j}=\max_k\cos(Z_{u,j}^e,X_{u,k}^e).
+ \label{eq:mr-evidence}
+\end{equation}
+两个匹配分量描述各模态模板与其搜索区域的最佳相似度，第三项描述同位置跨模态模板的一致性。该摘要为门控提供紧凑的匹配状态，但本身不携带被匹配搜索 token 的内容。
+
+因此，以 $Z_{m,j}^e$ 为查询，从由证据 token 与对侧搜索 token 组成的记忆中检索内容：
+\begin{equation}
+ q_{\ell,j}^{m}=W_{Q,\ell}\LN(Z_{m,j}^e),\qquad
+ c_{\ell,j}^{m\to n}=\softmax\!\left(
+ \frac{q_{\ell,j}^{m}K_\ell(\mathcal M_{\ell,j}^{m\to n})^{\T}}
+ {\sqrt{r_h}}\right)V_\ell(\mathcal M_{\ell,j}^{m\to n}),
+ \quad \mathcal M_{\ell,j}^{m\to n}=[E_{\ell,j};X_n^e].
+ \label{eq:mr-retrieval}
+\end{equation}
+其中 $E_{\ell,j}$ 是由 $e_j$ 映射得到的摘要 token。检索结果 $c_{\ell,j}^{m\to n}$ 提供与当前来源位置相关的搜索内容，$e_j$ 提供显式匹配证据；二者作用互补。C 的残差预测器将 $q,c,e$ 映射为 $\delta_{\ell,j}^{m\to n}$，并与摘要分支合成为有界正增益
+\begin{equation}
+ g_{\ell,j}^{m\to n}=\exp\!\left[
+ \tanh(\alpha_\ell)\tanh\!\left(f_\ell(e_j)_m+
+ \delta_{\ell,j}^{m\to n}\right)\right].
+ \label{eq:mr-c-gate}
+\end{equation}
+指数参数化使增益保持为正，双曲正切限制调制幅度；残差分支零初始化，使其初始行为退化为摘要门控。该门控沿来源轴缩放 B0 的跨模态注意力，得到 C 的门控权重
+\begin{equation}
+ W_{\ell,h,i,j}^{m\to n}
+ =A_{\ell,h,i,j}^{m\to n}g_{\ell,j}^{m\to n}.
+ \label{eq:mr-gated}
+\end{equation}
+由于 $g_j$ 随来源位置变化，$W$ 的行和一般不再等于 1；该行和表示 C 对接收位置 $i$ 分配的跨模态消息总量。
+
+\subsection{Mass-Redist：接收端条件化的质量守恒重分配}
+C 的来源门控刻画搜索条件下来源 token 的总体贡献，但同一来源对不同接收 token 的作用可能不同。若仅使用 $g_j$，同一来源位置在一个注意力头内对所有接收位置施加相同比例，因而无法表达接收位置特定的来源偏好。Mass-Redist 为每个接收--来源 token 对预测一个有界修正量，并将其用于调整 $W$ 内部的相对分配。
+
+具体而言，接收端状态取 B0 模板 MHSA 中接收模态的同模态自消息 $R_{\ell,h,i}^{n}$，来源内容取来源 Value $V_{\ell,h,j}^{m}$。对所有头拼接来源 Value 后记为 $\bar V_{\ell,j}^{m}$；C 分支检索到的来源上下文记为 $c_{\ell,j}^{m\to n}$，匹配证据仍为 $e_j$。低秩映射分别编码接收状态、来源 Value 与上下文：
+\begin{align}
+ r_{\ell,i}&=P_r\LN(R_{\ell,i}^{n}), &
+ v_{\ell,j}&=P_v\LN(\bar V_{\ell,j}^{m}),\\
+ u_{\ell,j}&=P_c\LN(c_{\ell,j}^{m\to n})+P_e e_j,
+ &r_{\ell,i},v_{\ell,j},u_{\ell,j}&\in\mathbb R^{d_r}.
+ \label{eq:mr-projections}
+\end{align}
+接收端表征使预测器能区分不同接收位置；来源 Value 提供实际将被聚合的内容，而非只用注意力分数代替消息；搜索上下文和匹配证据则将分配与 C 已观察到的当前场景条件相连。接收--来源交互采用逐维乘积，形成低秩的配对兼容性表示：
+\begin{equation}
+ p_{\ell,i,j}=\left(r_{\ell,i}\odot v_{\ell,j}\right)/\sqrt{d_r},
+ \qquad
+ \Delta_{\ell,i,j}^{m\to n}
+ =\eta\tanh\!\left(\phi_\ell([p_{\ell,i,j};u_{\ell,j};r_{\ell,i}])\right),
+ \quad |\Delta_{\ell,i,j}^{m\to n}|\le\eta.
+ \label{eq:mr-delta}
+\end{equation}
+其中 $\phi_\ell$ 为两层感知器，$\eta$ 控制单对来源的最大对数修正幅度。该配对结构允许相同来源依据接收状态获得不同修正；有界输出限制单次重分配的尖锐程度。输出层零初始化，因此初始时 $\Delta=0$，Mass-Redist 与 C 的权重完全一致。
+
+重分配在每个接收 token 与注意力头内独立进行。令 $\mathcal S_{\ell,h,i}=\{j:W_{\ell,h,i,j}^{m\to n}>0\}$ 为 C 保留的活跃来源集合，定义
+\begin{align}
+ \widetilde W_{\ell,h,i,j}^{m\to n}
+ &=\begin{cases}
+ \displaystyle M_{\ell,h,i}\,
+ \frac{W_{\ell,h,i,j}^{m\to n}
+ \exp(\Delta_{\ell,i,j}^{m\to n})}
+ {\sum_{k\in\mathcal S_{\ell,h,i}}
+ W_{\ell,h,i,k}^{m\to n}
+ \exp(\Delta_{\ell,i,k}^{m\to n})}, &j\in\mathcal S_{\ell,h,i},\\[1.2ex]
+ 0,&j\notin\mathcal S_{\ell,h,i},
+ \end{cases}\\
+ M_{\ell,h,i}&=\sum_j W_{\ell,h,i,j}^{m\to n}.
+ \label{eq:mr-redistribute}
+\end{align}
+等价地，活跃位置上 $\widetilde W_i=M_i\softmax_j(\log W_{i,j}+\Delta_{i,j})$。该式包含三个有明确分工的部分：$\log W$ 保留 B0 注意力与 C 门控形成的先验来源比例；$\Delta$ 按接收--来源兼容性进行有界修正；乘以 $M_i$ 则恢复 C 原有的跨模态总质量。故每个接收位置、每个注意力头满足
+\begin{equation}
+ \sum_j\widetilde W_{\ell,h,i,j}^{m\to n}
+ =\sum_j W_{\ell,h,i,j}^{m\to n}=M_{\ell,h,i},
+ \qquad
+ \widetilde W_{\ell,h,i,j}^{m\to n}=0\quad\text{if }W_{\ell,h,i,j}^{m\to n}=0.
+ \label{eq:mr-conservation}
+\end{equation}
+因此 Mass-Redist 不额外增加或削减 C 分配给该接收位置的跨模态消息预算，也不将注意力质量转移到原先屏蔽的来源；它只改变预算在活跃来源之间的去向。若某行无活跃来源，则该行输出保持为零。
+
+最终接收模态的模板消息为
+\begin{equation}
+ U_{\ell,n,i}=A_{\ell,n\leftarrow n}V_{\ell,n}
+ +\widetilde W_{\ell}^{m\to n}V_{\ell,m}.
+ \label{eq:mr-message}
+\end{equation}
+同模态项沿用 B0，跨模态项先由 C 确定来源级总量，再由 Mass-Redist 在每个接收位置内部调整来源分配。两种传播方向均采用该计算；融合层输出仍经原有多头拼接、输出投影和残差连接进入后续骨干，定位头与训练损失不变。Mass-Redist 的零初始化只保证初始时与 C 的输出一致；它本身不保证训练后性能提升，实际作用由匹配对照评估。
+
+\subsection{训练目标}
+模型采用与 B0 相同的分类热图、GIoU\cite{rezatofighi2019giou} 与 $L_1$ 损失联合训练，权重依次为 1、2、5。Mass-Redist 不引入额外监督项、真值框输入或推理期模板更新；其接收--来源分配由原跟踪目标端到端学习。训练和评测使用的搜索上下文定义保持一致。

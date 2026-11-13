@@ -231,6 +231,7 @@ class TBSITrack(nn.Module):
                 return_last_attn=False,
                 prev_search: torch.Tensor = None,
                 prev_tokens: torch.Tensor = None,
+                template_boxes: torch.Tensor = None,
                 ):
         """
         Args:
@@ -244,7 +245,8 @@ class TBSITrack(nn.Module):
             with torch.no_grad():
                 x_prev, _ = self.backbone(z=template, x=prev_search,
                                            ce_template_mask=ce_template_mask,
-                                           ce_keep_rate=ce_keep_rate)
+                                           ce_keep_rate=ce_keep_rate,
+                                           template_boxes=template_boxes)
                 feat_prev = x_prev[-1] if isinstance(x_prev, list) else x_prev
                 # Split RGB/TIR search tokens (64 template + 256 search per modality)
                 B, L, C = feat_prev.shape
@@ -258,6 +260,7 @@ class TBSITrack(nn.Module):
                                               ce_template_mask=ce_template_mask,
                                               ce_keep_rate=ce_keep_rate,
                                               return_last_attn=return_last_attn,
+                                              template_boxes=template_boxes,
                                               temporal_tokens=tokens_updated)
             feat_curr = x_curr[-1] if isinstance(x_curr, list) else x_curr
             out = self.forward_head(feat_curr, None, temporal_tokens=tokens_updated)
@@ -270,6 +273,7 @@ class TBSITrack(nn.Module):
         x, aux_dict = self.backbone(z=template, x=search,
                                     ce_template_mask=ce_template_mask,
                                     ce_keep_rate=ce_keep_rate,
+                                    template_boxes=template_boxes,
                                     return_last_attn=return_last_attn, )
 
         feat_last = x
@@ -353,6 +357,9 @@ class TBSITrack(nn.Module):
 
 
 def build_tbsi_track(cfg, training=True):
+    if (getattr(cfg.MODEL.BACKBONE, 'MASS_REDIST_MODE', 'pair') != 'pair' and
+            getattr(cfg.MODEL.BACKBONE, 'TBSI_FUSION', 'legacy') != 'tbsi_e'):
+        raise ValueError('Low-rank MR requires the explicit TBSI-E fusion path')
     current_dir = os.path.dirname(os.path.abspath(__file__))
     pretrained_path = os.path.join(current_dir, '../../../pretrained_models')
     if cfg.MODEL.PRETRAIN_FILE and ('TBSITrack' not in cfg.MODEL.PRETRAIN_FILE) and training:
@@ -375,7 +382,70 @@ def build_tbsi_track(cfg, training=True):
                                             smsa_alpha=getattr(cfg.MODEL.RIMA, 'ENTMAX_ALPHA', 1.3),
                                             smsa_fp32=getattr(cfg.MODEL.RIMA, 'FP32_CORE', True),
                                             use_checkpoint=use_checkpoint,
-                                            fusion_mode=getattr(cfg.MODEL.BACKBONE, 'TBSI_FUSION', 'legacy'))
+                                            fusion_mode=getattr(cfg.MODEL.BACKBONE, 'TBSI_FUSION', 'legacy'),
+                                            early_conditioned_cross_gate=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_CONDITIONED_CROSS_GATE', False),
+                                            early_gate_hidden=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_HIDDEN', 32),
+                                            early_gate_source_mode=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_SOURCE_MODE', 'dynamic'),
+                                            early_gate_search_context_mode=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_SEARCH_CONTEXT_MODE', 'off'),
+                                            early_gate_center_source_log_gain=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_CENTER_SOURCE_LOG_GAIN', False),
+                                            early_gate_search_context_layer_aligned=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_SEARCH_CONTEXT_LAYER_ALIGNED', False),
+                                            spatial_pair_mode=getattr(cfg.MODEL.BACKBONE, 'SPATIAL_PAIR_MODE', 'off'),
+                                            spatial_pair_temperature=getattr(cfg.MODEL.BACKBONE, 'SPATIAL_PAIR_TEMPERATURE', 0.1),
+                                            spatial_pair_max_bias=getattr(cfg.MODEL.BACKBONE, 'SPATIAL_PAIR_MAX_BIAS', 1.0),
+                                            early_target_support_mode=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_TARGET_SUPPORT_MODE', 'max'),
+                                            early_target_support_temperature=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_TARGET_SUPPORT_TEMPERATURE', 0.1),
+                                            early_source_evidence=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_SOURCE_EVIDENCE', False),
+                                            early_source_evidence_hidden=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_SOURCE_EVIDENCE_HIDDEN', 24),
+                                            early_source_evidence_delta=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_SOURCE_EVIDENCE_DELTA', 0.25),
+                                            early_source_evidence_topk=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_SOURCE_EVIDENCE_TOPK', 4),
+                                            structured_spatial_evidence=getattr(
+                                                cfg.MODEL.BACKBONE, 'STRUCTURED_SPATIAL_EVIDENCE', False),
+                                            structured_evidence_hidden=getattr(
+                                                cfg.MODEL.BACKBONE, 'STRUCTURED_EVIDENCE_HIDDEN', 16),
+                                            dual_message_mode=getattr(
+                                                cfg.MODEL.BACKBONE, 'DUAL_MESSAGE_MODE', 'off'),
+                                            dual_message_max_delta=getattr(
+                                                cfg.MODEL.BACKBONE, 'DUAL_MESSAGE_MAX_DELTA', 0.1),
+                                            msha_message_normalization=getattr(
+                                                cfg.MODEL.BACKBONE, 'MSHA_MESSAGE_NORMALIZATION', 'off'),
+                                            fu_enabled=getattr(cfg.MODEL.BACKBONE, 'FU_ENABLE', False),
+                                            fu_rank=getattr(cfg.MODEL.BACKBONE, 'FU_RANK', 8),
+                                            fu_max_relation=getattr(cfg.MODEL.BACKBONE, 'FU_MAX_RELATION', 0.5),
+                                            fu_max_rejection=getattr(cfg.MODEL.BACKBONE, 'FU_MAX_REJECTION', 0.5),
+                                            receiver_cross_write=getattr(cfg.MODEL.BACKBONE, 'RECEIVER_CROSS_WRITE', False),
+                                            receiver_write_max_delta=getattr(cfg.MODEL.BACKBONE, 'RECEIVER_WRITE_MAX_DELTA', 0.1),
+                                            early_gate_value_modulation=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_VALUE_MODULATION', True),
+                                            early_gate_conservative_allocation=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_CONSERVATIVE_ALLOCATION', False),
+                                            early_gate_evidence_gradient_isolation=getattr(
+                                                cfg.MODEL.BACKBONE, 'EARLY_GATE_EVIDENCE_GRADIENT_ISOLATION', False),
+                                            cross_mass_preserving_relation=getattr(
+                                                cfg.MODEL.BACKBONE, 'CROSS_MASS_PRESERVING_RELATION', False),
+                                            cross_relation_max_bias=getattr(
+                                                cfg.MODEL.BACKBONE, 'CROSS_RELATION_MAX_BIAS', 0.1),
+                                            query_source_write=getattr(
+                                                cfg.MODEL.BACKBONE, 'QUERY_SOURCE_WRITE', False),
+                                            query_source_write_hidden=getattr(
+                                                cfg.MODEL.BACKBONE, 'QUERY_SOURCE_WRITE_HIDDEN', 32),
+                                            query_source_write_max_delta=getattr(
+                                                cfg.MODEL.BACKBONE, 'QUERY_SOURCE_WRITE_MAX_DELTA', 0.15),
+                                            mass_redist_enable=getattr(
+                                                cfg.MODEL.BACKBONE, 'MASS_REDIST_ENABLE', False),
+                                            mass_redist_mode=getattr(
+                                                cfg.MODEL.BACKBONE, 'MASS_REDIST_MODE', 'pair'))
     else:
         raise NotImplementedError
 
@@ -473,4 +543,41 @@ def build_tbsi_track(cfg, training=True):
         else:
             print(f'DA mode: residual (detach_base, scale={model.da_fusion_scale})')
 
+    # An explicit common full-parent initialization supersedes partial SOT
+    # loading. Do not search for a latest checkpoint or accept partial keys.
+    initial_state = getattr(cfg.MODEL, 'INIT_CHECKPOINT', '')
+    if training and initial_state:
+        if not os.path.isabs(initial_state):
+            initial_state = os.path.normpath(os.path.join(current_dir, '../../../', initial_state))
+        if not os.path.isfile(initial_state):
+            raise FileNotFoundError(initial_state)
+        shared_checkpoint = torch.load(initial_state, map_location='cpu')
+        model.load_state_dict(shared_checkpoint['net'], strict=True)
+
+    # Install only after all outer initialization and parent weight loading.
+    # The module is absent, and no RNG is consumed, in protected configs.
+    value_direction = getattr(cfg.MODEL.BACKBONE, 'VALUE_DIRECTION', None)
+    if value_direction is not None and value_direction.ENABLE:
+        if getattr(cfg.MODEL.BACKBONE, 'TBSI_FUSION', '') != 'tbsi_e':
+            raise ValueError('Value direction requires TBSI-E fusion')
+        receiver_mode = getattr(value_direction, 'RECEIVER_MODE', 'colocated')
+        if receiver_mode == 'attention':
+            if value_direction.MODE != 'direction':
+                raise ValueError('Attention-aligned Value repair requires direction mode')
+            from lib.models.layers.early_conditioned_value_direction_aligned import install_aligned_value_direction
+            install_aligned_value_direction(model, rank=value_direction.RANK,
+                                            max_step=value_direction.MAX_STEP)
+        elif receiver_mode == 'attention_stopgrad':
+            if value_direction.MODE != 'direction':
+                raise ValueError('Transport gradient isolation requires direction mode')
+            from lib.models.layers.early_conditioned_value_direction_transport_grad import install_transport_gradient_isolated_value_direction
+            install_transport_gradient_isolated_value_direction(
+                model, rank=value_direction.RANK, max_step=value_direction.MAX_STEP)
+        elif receiver_mode == 'colocated':
+            from lib.models.layers.early_conditioned_value_direction import install_value_direction
+            install_value_direction(model, rank=value_direction.RANK,
+                                    max_step=value_direction.MAX_STEP,
+                                    mode=value_direction.MODE)
+        else:
+            raise ValueError('Unknown Value receiver mode: ' + str(receiver_mode))
     return model
