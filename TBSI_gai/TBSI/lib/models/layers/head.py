@@ -96,8 +96,7 @@ class Corner_Predictor(nn.Module):
 
 
 class CenterPredictor(nn.Module, ):
-    def __init__(self, inplanes=64, channel=256, feat_sz=20, stride=16, freeze_bn=False,
-                 strip_score_cfg=None):
+    def __init__(self, inplanes=64, channel=256, feat_sz=20, stride=16, freeze_bn=False):
         super(CenterPredictor, self).__init__()
         self.feat_sz = feat_sz
         self.stride = stride
@@ -127,14 +126,6 @@ class CenterPredictor(nn.Module, ):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
-
-        self.strip_score_refiner = None
-        if strip_score_cfg is not None and getattr(strip_score_cfg, 'ENABLE', False):
-            from lib.models.layers.strip_score_refiner import StripScoreRefiner
-            self.strip_score_refiner = StripScoreRefiner(
-                dim=channel, grid_size=feat_sz,
-                strip_size=int(getattr(strip_score_cfg, 'STRIP_SIZE', 7)),
-                alpha_init=float(getattr(strip_score_cfg, 'ALPHA_INIT', 0.0)))
 
     def forward(self, x, gt_score_map=None):
         """ Forward pass with input x. """
@@ -189,8 +180,6 @@ class CenterPredictor(nn.Module, ):
 
         # ctr branch
         x_ctr1 = self.conv1_ctr(x)
-        if self.strip_score_refiner is not None:
-            x_ctr1 = self.strip_score_refiner(x_ctr1)
         x_ctr2 = self.conv2_ctr(x_ctr1)
         x_ctr3 = self.conv3_ctr(x_ctr2)
         x_ctr4 = self.conv4_ctr(x_ctr3)
@@ -253,8 +242,7 @@ def build_box_head(cfg, hidden_dim):
         out_channel = cfg.MODEL.HEAD.NUM_CHANNELS
         feat_sz = int(cfg.DATA.SEARCH.SIZE / stride)
         center_head = CenterPredictor(inplanes=in_channel, channel=out_channel,
-                                      feat_sz=feat_sz, stride=stride,
-                                      strip_score_cfg=getattr(cfg.MODEL, 'STRIP_SCORE', None))
+                                      feat_sz=feat_sz, stride=stride)
         return center_head
     else:
         raise ValueError("HEAD TYPE %s is not supported." % cfg.MODEL.HEAD_TYPE)

@@ -19,12 +19,17 @@ class StableLinear(nn.Module):
 
 
 class ReceiverSourceMassReallocator(nn.Module):
-    def __init__(self, dim=768, context_dim=64, rank=32, max_delta=0.25):
+    def __init__(self, dim=768, context_dim=64, rank=32, max_delta=0.25,
+                 agreement_gate=False):
         super().__init__()
         self.dim = int(dim)
         self.context_dim = int(context_dim)
         self.rank = int(rank)
         self.max_delta = float(max_delta)
+        self.agreement_gate_enabled = bool(agreement_gate)
+        if self.agreement_gate_enabled:
+            from .source_agreement_delta_gate import SourceAgreementDeltaGate
+            self.agreement_delta_gate = SourceAgreementDeltaGate()
         self.receiver_norm = nn.LayerNorm(dim)
         self.receiver = StableLinear(dim, rank)
         self.source_norm = nn.LayerNorm(dim)
@@ -64,6 +69,8 @@ class ReceiverSourceMassReallocator(nn.Module):
         pair = torch.cat((interaction, context[:, None].expand(-1, nq, -1, -1)), dim=-1)
         pair = torch.cat((pair, receiver[:, :, None].expand(-1, -1, ns, -1)), dim=-1)
         delta = self.max_delta * torch.tanh(self.readout(pair).squeeze(-1))
+        if self.agreement_gate_enabled:
+            delta = self.agreement_delta_gate(delta, source_evidence)
 
         mass = gated_attention.sum(dim=-1, keepdim=True)
         eps = torch.finfo(gated_attention.dtype).tiny

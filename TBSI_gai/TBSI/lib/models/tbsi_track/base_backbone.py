@@ -146,15 +146,17 @@ class BaseBackbone(nn.Module):
         """
         temporal_tokens = kwargs.pop('temporal_tokens', None)
         template_fg_masks = kwargs.pop('template_fg_masks', None)
+        template_boxes = kwargs.pop('template_boxes', None)
         diagnostic = kwargs.pop('diagnostic', False)
         diagnostic_early_block = kwargs.pop('diagnostic_early_block', 2)
         diagnostic_late_block = kwargs.pop('diagnostic_late_block', 9)
         diagnostic_tbsi_index = kwargs.pop('diagnostic_tbsi_index', 0)
         diagnostic_post_block = kwargs.pop('diagnostic_post_block', 5)
+        box_kwargs = {} if template_boxes is None else {'template_boxes': template_boxes}
         if diagnostic:
             x, aux_dict = self.forward_features(
                 z, x, temporal_tokens=temporal_tokens,
-                template_fg_masks=template_fg_masks,
+                template_fg_masks=template_fg_masks, **box_kwargs,
                 diagnostic=True,
                 diagnostic_early_block=diagnostic_early_block,
                 diagnostic_late_block=diagnostic_late_block,
@@ -163,6 +165,6 @@ class BaseBackbone(nn.Module):
         else:
             x, aux_dict = self.forward_features(
                 z, x, temporal_tokens=temporal_tokens,
-                template_fg_masks=template_fg_masks)
+                template_fg_masks=template_fg_masks, **box_kwargs)
 
         return x, aux_dict

@@ -445,7 +445,24 @@ def build_tbsi_track(cfg, training=True):
                                             mass_redist_enable=getattr(
                                                 cfg.MODEL.BACKBONE, 'MASS_REDIST_ENABLE', False),
                                             mass_redist_mode=getattr(
-                                                cfg.MODEL.BACKBONE, 'MASS_REDIST_MODE', 'pair'))
+                                                cfg.MODEL.BACKBONE, 'MASS_REDIST_MODE', 'pair'),
+                                            mass_redist_agreement_gate=getattr(
+                                                cfg.MODEL.BACKBONE,
+                                                'MASS_REDIST_AGREEMENT_GATE', False),
+                                            cbmr_enable=getattr(
+                                                cfg.MODEL.BACKBONE, 'CBMR_ENABLE', False),
+                                            cbmr_strength=getattr(
+                                                cfg.MODEL.BACKBONE, 'CBMR_STRENGTH', 0.25),
+                                            cbmr_background_threshold=getattr(
+                                                cfg.MODEL.BACKBONE, 'CBMR_BACKGROUND_THRESHOLD', 1e-6),
+                                            cbmr_normalization=getattr(
+                                                cfg.MODEL.BACKBONE, 'CBMR_NORMALIZATION', 'symmetric'),
+                                            receiver_message_residual=getattr(
+                                                cfg.MODEL.BACKBONE, 'RECEIVER_MESSAGE_RESIDUAL', False),
+                                            receiver_message_residual_rank=getattr(
+                                                cfg.MODEL.BACKBONE, 'RECEIVER_MESSAGE_RESIDUAL_RANK', 16),
+                                            receiver_message_residual_max_delta=getattr(
+                                                cfg.MODEL.BACKBONE, 'RECEIVER_MESSAGE_RESIDUAL_MAX_DELTA', 0.1))
     else:
         raise NotImplementedError
 
@@ -572,6 +589,13 @@ def build_tbsi_track(cfg, training=True):
                 raise ValueError('Transport gradient isolation requires direction mode')
             from lib.models.layers.early_conditioned_value_direction_transport_grad import install_transport_gradient_isolated_value_direction
             install_transport_gradient_isolated_value_direction(
+                model, rank=value_direction.RANK, max_step=value_direction.MAX_STEP)
+        elif receiver_mode == 'search':
+            if value_direction.MODE != 'direction':
+                raise ValueError('Search-conditioned Value repair requires direction mode')
+            from lib.models.layers.search_conditioned_value_direction import (
+                install_search_conditioned_value_direction)
+            install_search_conditioned_value_direction(
                 model, rank=value_direction.RANK, max_step=value_direction.MAX_STEP)
         elif receiver_mode == 'colocated':
             from lib.models.layers.early_conditioned_value_direction import install_value_direction

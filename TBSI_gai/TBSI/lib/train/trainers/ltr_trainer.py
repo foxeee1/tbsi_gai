@@ -64,9 +64,7 @@ class LTRTrainer(BaseTrainer):
         # Lightweight diagnostics (gradient flow, loss decomposition, internal signals)
         if settings.local_rank in [-1, 0] and getattr(settings, 'use_diagnostics', True):
             log_dir = os.path.dirname(getattr(settings, 'log_file', os.path.join(settings.save_dir, 'logs')))
-            self.diagnostics = Diagnostics(
-                self.actor.net, log_dir,
-                log_interval=int(getattr(settings, 'print_interval', 10)))
+            self.diagnostics = Diagnostics(self.actor.net, log_dir, log_interval=50)
             print(f"  Diagnostics enabled → {log_dir}/gradient_flow.csv")
         else:
             self.diagnostics = None
@@ -101,17 +99,6 @@ class LTRTrainer(BaseTrainer):
         """Do a cycle of training or validation."""
 
         self.actor.train(loader.training)
-        if loader.training and getattr(self.settings, 'adaptive_post_router_only', False):
-            # Keep frozen M1 and its BatchNorm statistics fixed; only the new
-            # router is optimized in this contract run.
-            net = self.actor.net.module if hasattr(self.actor.net, 'module') else self.actor.net
-            net.eval()
-            if getattr(net, 'adaptive_post_fusion', None) is not None:
-                net.adaptive_post_fusion.train()
-        if loader.training and getattr(self.settings, 'strip_score_only', False):
-            net = self.actor.net.module if hasattr(self.actor.net, 'module') else self.actor.net
-            net.eval()
-            net.box_head.strip_score_refiner.train()
         torch.set_grad_enabled(loader.training)
 
         self._init_timing()
@@ -152,8 +139,6 @@ class LTRTrainer(BaseTrainer):
                     self.accum_count += 1
                     if self.accum_count % self.accum_steps == 0:
                         self._debug_finite_gradients(i, self.epoch)
-                        if self.diagnostics and i % self.settings.print_interval == 0:
-                            self.diagnostics.log_stser_preclip(self.actor.net, i, self.epoch)
                         if self.settings.grad_clip_norm > 0:
                             torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
                         # Diagnostics: capture gradients BEFORE optimizer.step() and zero_grad()
@@ -167,8 +152,6 @@ class LTRTrainer(BaseTrainer):
                     if self.accum_count % self.accum_steps == 0:
                         self.scaler.unscale_(self.optimizer)
                         self._debug_finite_gradients(i, self.epoch)
-                        if self.diagnostics and i % self.settings.print_interval == 0:
-                            self.diagnostics.log_stser_preclip(self.actor.net, i, self.epoch)
                         if self.settings.grad_clip_norm > 0:
                             torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
                         # Diagnostics: capture gradients BEFORE optimizer.step() and zero_grad()

@@ -1,6 +1,7 @@
 import importlib
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
 from lib.test.evaluation.environment import env_settings
 import time
@@ -69,7 +70,7 @@ class Tracker:
         tracker = self.tracker_class(params, self.dataset_name)
         return tracker
 
-    def run_sequence(self, seq, debug=None, run_id=None, name=None):
+    def run_sequence(self, seq, debug=None, run_id=None, name=None, prefetch_workers=0):
         """Run tracker on sequence.
         args:
             seq: Sequence to run the tracker on.
@@ -116,10 +117,10 @@ class Tracker:
         if hasattr(tracker, 'reset_temporal_tokens'):
             tracker.reset_temporal_tokens()
 
-        output = self._track_sequence(tracker, seq, init_info)
+        output = self._track_sequence(tracker, seq, init_info, prefetch_workers=prefetch_workers)
         return output
 
-    def _track_sequence(self, tracker, seq, init_info):
+    def _track_sequence(self, tracker, seq, init_info, prefetch_workers=0):
         # Define outputs
         # Each field in output is a list containing tracker prediction for each frame.
 
@@ -146,17 +147,37 @@ class Tracker:
                 if key in tracker_out or val is not None:
                     output[key].append(val)
 
-        # Preload all frames to GPU memory to eliminate per-frame I/O
         frame_count = len(seq.frames[0])
-        frames_gpu = [None] * frame_count
-        for i in range(frame_count):
-            image_v = self._read_image(seq.frames[0][i])
-            image_i = self._read_image(seq.frames[1][i])
-            img_np = np.concatenate([image_v, image_i], 2)
-            frames_gpu[i] = img_np
+        prefetch_workers = int(prefetch_workers)
+        if prefetch_workers < 0:
+            raise ValueError('prefetch_workers must be non-negative')
+
+        def load_frame_pair(index):
+            image_v = self._read_image(seq.frames[0][index])
+            image_i = self._read_image(seq.frames[1][index])
+            return np.concatenate([image_v, image_i], 2)
+
+        if prefetch_workers == 0:
+            # Stream serially to keep host memory bounded for long sequences.
+            image_iter = map(load_frame_pair, range(frame_count))
+        else:
+            def prefetched_frames():
+                with ThreadPoolExecutor(max_workers=prefetch_workers) as executor:
+                    pending = {0: executor.submit(load_frame_pair, 0)}
+                    for index in range(1, min(frame_count, prefetch_workers + 1)):
+                        pending[index] = executor.submit(load_frame_pair, index)
+                    yield pending.pop(0).result()
+                    for index in range(1, frame_count):
+                        image = pending.pop(index).result()
+                        next_index = index + prefetch_workers
+                        if next_index < frame_count:
+                            pending[next_index] = executor.submit(load_frame_pair, next_index)
+                        yield image
+
+            image_iter = prefetched_frames()
 
         # Initialize on first frame
-        image = frames_gpu[0]
+        image = next(image_iter)
         start_time = time.time()
         init_info['sequence_name'] = seq.name
         init_info['frame_num'] = 0
@@ -173,9 +194,8 @@ class Tracker:
 
         _store_outputs(out, init_default)
 
-        # Track remaining frames using preloaded frames
-        for frame_num in range(1, frame_count):
-            image = frames_gpu[frame_num]
+        # Consume images in order while bounded worker threads load future pairs.
+        for frame_num, image in enumerate(image_iter, start=1):
             start_time = time.time()
 
             info = seq.frame_info(frame_num)

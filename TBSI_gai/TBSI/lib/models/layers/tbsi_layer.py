@@ -23,6 +23,10 @@ from lib.models.layers.conservative_source_allocation import ConservativeSourceA
 from lib.models.layers.early_gate_evidence_gradient_isolation import EarlyGateEvidenceGradientIsolation
 from lib.models.layers.query_source_conditional_write import QuerySourceConditionalWrite
 from lib.models.layers.receiver_source_mass_reallocator import ReceiverSourceMassReallocator
+from lib.models.layers.cycle_laplacian_message_repair import CycleLaplacianMessageRepair
+from lib.models.layers.receiver_conditioned_message_residual import (
+    ReceiverConditionedMessageResidual,
+)
 
 
 class V2TemplateFusion(nn.Module):
@@ -50,10 +54,15 @@ class V2TemplateFusion(nn.Module):
                  query_source_write=False, query_source_write_hidden=32,
                  query_source_write_max_delta=0.15,
                  mass_redist_enable=False, mass_redist_mode="pair",
+                 mass_redist_agreement_gate=False,
                  early_target_support_mode="max",
                  early_target_support_temperature=0.1,
                  spatial_pair_mode="off", spatial_pair_temperature=0.1,
-                 spatial_pair_max_bias=1.0):
+                 spatial_pair_max_bias=1.0,
+                 cbmr_enable=False, cbmr_strength=0.25,
+                 cbmr_background_threshold=1e-6, cbmr_normalization='symmetric',
+                 receiver_message_residual=False, receiver_message_residual_rank=16,
+                 receiver_message_residual_max_delta=0.1):
         super().__init__()
         self.norm = norm_layer(dim)
         self.num_heads = num_heads
@@ -66,6 +75,26 @@ class V2TemplateFusion(nn.Module):
         self.capture_gate_utility = False
         self.last_gate_log_gain = None
         self.spatial_pair_mode = str(spatial_pair_mode)
+        self.cbmr_enabled = bool(cbmr_enable)
+        self.receiver_message_residual_enabled = bool(receiver_message_residual)
+        if self.receiver_message_residual_enabled:
+            self.receiver_message_residual_rgb = ReceiverConditionedMessageResidual(
+                dim=dim, rank=receiver_message_residual_rank,
+                max_delta=receiver_message_residual_max_delta)
+            self.receiver_message_residual_tir = ReceiverConditionedMessageResidual(
+                dim=dim, rank=receiver_message_residual_rank,
+                max_delta=receiver_message_residual_max_delta)
+        if self.cbmr_enabled:
+            if cbmr_normalization == 'symmetric':
+                repair_class = CycleLaplacianMessageRepair
+            elif cbmr_normalization == 'difference':
+                from .cycle_difference_message_repair import CycleDifferenceMessageRepair
+                repair_class = CycleDifferenceMessageRepair
+            else:
+                raise ValueError('Unknown CBMR normalization: ' + str(cbmr_normalization))
+            self.cbmr = repair_class(
+                strength=cbmr_strength,
+                background_threshold=cbmr_background_threshold)
         if self.spatial_pair_mode not in ('off', 'pair', 'sep'):
             raise ValueError('Unknown spatial pair mode')
         if self.spatial_pair_mode != 'off':
@@ -124,6 +153,10 @@ class V2TemplateFusion(nn.Module):
         self.query_source_write_enabled = bool(query_source_write)
         self.mass_redist_enabled = bool(mass_redist_enable)
         self.mass_redist_mode = str(mass_redist_mode)
+        self.mass_redist_agreement_gate = bool(mass_redist_agreement_gate)
+        if self.mass_redist_agreement_gate and (
+                not self.mass_redist_enabled or self.mass_redist_mode != 'pair'):
+            raise ValueError('source-agreement delta gate requires pair Mass-Redist')
         if self.mass_redist_mode not in ('pair', 'lr_joint', 'lr_conserved', 'lr_expected'):
             raise ValueError('unknown Mass-Redist mode')
         if self.mass_redist_mode != 'pair':
@@ -147,7 +180,7 @@ class V2TemplateFusion(nn.Module):
             with torch.random.fork_rng(devices=[]):
                 if self.mass_redist_mode == 'pair':
                     allocator = ReceiverSourceMassReallocator
-                    options = {}
+                    options = {'agreement_gate': self.mass_redist_agreement_gate}
                 elif self.mass_redist_mode == 'lr_expected':
                     from .expected_score_mass_reallocator import ExpectedScoreMassReallocator
                     allocator = ExpectedScoreMassReallocator
@@ -325,9 +358,16 @@ class V2TemplateFusion(nn.Module):
             if hasattr(self, 'value_direction') and self.value_direction_enabled:
                 mode = self.value_direction_mode
                 rgb_kwargs, tir_kwargs = {}, {}
-                if getattr(self, 'value_direction_aligned_enabled', False):
+                if (getattr(self, 'value_direction_aligned_enabled', False) or
+                        getattr(self, 'value_direction_search_enabled', False)):
                     rgb_kwargs['receiver_attention'] = attn[:, :, n_rgb:, :n_rgb]
                     tir_kwargs['receiver_attention'] = attn[:, :, :n_rgb, n_rgb:]
+                if getattr(self, 'value_direction_search_enabled', False):
+                    if fusion_context is None or len(fusion_context) != 4:
+                        raise ValueError('search-conditioned Value repair requires fusion_context')
+                    _, _, rgb_search, tir_search = fusion_context
+                    rgb_kwargs['receiver_search_tokens'] = tir_search
+                    tir_kwargs['receiver_search_tokens'] = rgb_search
                 cross_rgb = self.value_direction(
                     cross_rgb, x_rgb_template, x_tir_template, evidence, mode=mode, **rgb_kwargs)
                 # Canonical evidence is relative to the source role.
@@ -428,6 +468,12 @@ class V2TemplateFusion(nn.Module):
             if self.receiver_cross_write_enabled:
                 msg_rt, _ = self.receiver_write_rgb(msg_rr, msg_rt)
                 msg_tr, _ = self.receiver_write_tir(msg_tt, msg_tr)
+            if self.cbmr_enabled:
+                msg_rt, msg_tr = self.cbmr(
+                    msg_rt, msg_tr, attn_rt, attn_tr, template_boxes)
+            if self.receiver_message_residual_enabled:
+                msg_rt = self.receiver_message_residual_rgb(x_rgb_template, msg_rt)
+                msg_tr = self.receiver_message_residual_tir(x_tir_template, msg_tr)
             rgb = msg_rr + msg_rt
             tir = msg_tt + msg_tr
             x = torch.cat((rgb, tir), dim=2).transpose(1, 2).reshape(bsz, length, dim)
@@ -546,10 +592,15 @@ class TBSILayer(nn.Module):
                  query_source_write=False, query_source_write_hidden=32,
                  query_source_write_max_delta=0.15,
                  mass_redist_enable=False, mass_redist_mode="pair",
+                 mass_redist_agreement_gate=False,
                  early_target_support_mode="max",
                  early_target_support_temperature=0.1,
                  spatial_pair_mode="off", spatial_pair_temperature=0.1,
-                 spatial_pair_max_bias=1.0):
+                 spatial_pair_max_bias=1.0,
+                 cbmr_enable=False, cbmr_strength=0.25,
+                 cbmr_background_threshold=1e-6, cbmr_normalization='symmetric',
+                 receiver_message_residual=False, receiver_message_residual_rank=16,
+                 receiver_message_residual_max_delta=0.1):
         super().__init__()
         self.fusion_mode = fusion_mode
         if fusion_mode == 'tbsi_e':
@@ -586,11 +637,19 @@ class TBSILayer(nn.Module):
                 query_source_write_max_delta=query_source_write_max_delta,
                 mass_redist_enable=mass_redist_enable,
                 mass_redist_mode=mass_redist_mode,
+                mass_redist_agreement_gate=mass_redist_agreement_gate,
                 early_target_support_mode=early_target_support_mode,
                 early_target_support_temperature=early_target_support_temperature,
                 spatial_pair_mode=spatial_pair_mode,
                 spatial_pair_temperature=spatial_pair_temperature,
-                spatial_pair_max_bias=spatial_pair_max_bias)
+                spatial_pair_max_bias=spatial_pair_max_bias,
+                cbmr_enable=cbmr_enable,
+                cbmr_strength=cbmr_strength,
+                cbmr_background_threshold=cbmr_background_threshold,
+                cbmr_normalization=cbmr_normalization,
+                receiver_message_residual=receiver_message_residual,
+                receiver_message_residual_rank=receiver_message_residual_rank,
+                receiver_message_residual_max_delta=receiver_message_residual_max_delta)
             return
 
         self.t_fusion = nn.Sequential(
@@ -632,11 +691,15 @@ class TBSILayer(nn.Module):
                 query_source_write_max_delta=query_source_write_max_delta,
                 mass_redist_enable=mass_redist_enable,
                 mass_redist_mode=mass_redist_mode,
+                mass_redist_agreement_gate=mass_redist_agreement_gate,
                 early_target_support_mode=early_target_support_mode,
                 early_target_support_temperature=early_target_support_temperature,
                 spatial_pair_mode=spatial_pair_mode,
                 spatial_pair_temperature=spatial_pair_temperature,
-                spatial_pair_max_bias=spatial_pair_max_bias)
+                spatial_pair_max_bias=spatial_pair_max_bias,
+                receiver_message_residual=receiver_message_residual,
+                receiver_message_residual_rank=receiver_message_residual_rank,
+                receiver_message_residual_max_delta=receiver_message_residual_max_delta)
 
         self.ca_s2t_v2f = CASTBlock(
             dim=dim, num_heads=num_heads, mode='s2t', mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop,

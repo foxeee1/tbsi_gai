@@ -44,6 +44,9 @@ from lib.models.layers.dual_message_modulator import reset_dual_message_modulato
 from lib.models.layers.fine_grained_unified_allocator import reset_fine_grained_unified_allocator
 from lib.models.layers.receiver_cross_write import reset_receiver_cross_write
 from lib.models.layers.cross_mass_preserving_relation import reset_cross_mass_preserving_relation
+from lib.models.layers.receiver_conditioned_message_residual import (
+    reset_receiver_conditioned_message_residual,
+)
 
 
 class Attention(nn.Module):
@@ -146,10 +149,15 @@ class VisionTransformerTBSI(BaseBackbone):
                  query_source_write=False, query_source_write_hidden=32,
                  query_source_write_max_delta=0.15,
                  mass_redist_enable=False, mass_redist_mode="pair",
+                 mass_redist_agreement_gate=False,
                  early_target_support_mode="max",
                  early_target_support_temperature=0.1,
                  spatial_pair_mode="off", spatial_pair_temperature=0.1,
-                 spatial_pair_max_bias=1.0):
+                 spatial_pair_max_bias=1.0,
+                 cbmr_enable=False, cbmr_strength=0.25,
+                 cbmr_background_threshold=1e-6, cbmr_normalization='symmetric',
+                 receiver_message_residual=False, receiver_message_residual_rank=16,
+                 receiver_message_residual_max_delta=0.1):
         """
         Args:
             img_size (int, tuple): input image size
@@ -246,7 +254,15 @@ class VisionTransformerTBSI(BaseBackbone):
                     query_source_write_hidden=query_source_write_hidden,
                     query_source_write_max_delta=query_source_write_max_delta,
                     mass_redist_enable=mass_redist_enable,
-                    mass_redist_mode=mass_redist_mode))
+                    mass_redist_mode=mass_redist_mode,
+                    mass_redist_agreement_gate=mass_redist_agreement_gate,
+                    cbmr_enable=cbmr_enable,
+                    cbmr_strength=cbmr_strength,
+                    cbmr_background_threshold=cbmr_background_threshold,
+                    cbmr_normalization=cbmr_normalization,
+                    receiver_message_residual=receiver_message_residual,
+                    receiver_message_residual_rank=receiver_message_residual_rank,
+                    receiver_message_residual_max_delta=receiver_message_residual_max_delta))
 
         self.init_weights(weight_init)
         # Generic ViT initialization overwrites child Linear initialization.
@@ -261,6 +277,7 @@ class VisionTransformerTBSI(BaseBackbone):
         from lib.models.layers.receiver_source_mass_reallocator import reset_receiver_source_mass_reallocator
         reset_receiver_source_mass_reallocator(self)
         reset_cross_mass_preserving_relation(self)
+        reset_receiver_conditioned_message_residual(self)
         from lib.models.layers.early_gate_search_context import reset_early_gate_search_context
         reset_early_gate_search_context(self)
 
