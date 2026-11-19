@@ -1,0 +1,396 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from timm.models.layers import trunc_normal_
+
+from lib.models.layers.rpe import generate_2d_concatenated_self_attention_relative_positional_encoding_index
+
+
+def _entmax_bisect_forward(logits, alpha=1.3, dim=-1, n_iter=50):
+    """Alpha-entmax forward evaluation by bisection.
+
+    This function is intentionally forward-only. Its old implementation let
+    autograd differentiate through all bisection iterations and the support
+    boundary, which caused rare non-finite gradients on a fixed training
+    batch under AMP.
+    """
+    if alpha == 1.0:
+        return logits.softmax(dim=dim)
+    if not (1.0 < alpha <= 2.0):
+        raise ValueError("SMSA ENTMAX_ALPHA must be in (1, 2]")
+
+    x = logits.float()
+    d = alpha - 1.0
+    x_max = x.max(dim=dim, keepdim=True).values
+    # At tau=max(x)-1/d, the largest probability is exactly one and the
+    # remaining non-negative terms make the sum >= 1; tau=max(x) gives 0.
+    tau_lo = x_max - (1.0 / d)
+    tau_hi = x_max
+    for _ in range(n_iter):
+        tau = (tau_lo + tau_hi) * 0.5
+        p = (d * (x - tau)).clamp_min(0).pow(1.0 / d)
+        too_large = p.sum(dim=dim, keepdim=True) > 1.0
+        tau_lo = torch.where(too_large, tau, tau_lo)
+        tau_hi = torch.where(too_large, tau_hi, tau)
+    tau = (tau_lo + tau_hi) * 0.5
+    p = (d * (x - tau)).clamp_min(0).pow(1.0 / d)
+    p = p / p.sum(dim=dim, keepdim=True).clamp_min(torch.finfo(p.dtype).eps)
+    return p
+
+
+class _EntmaxBisectFunction(torch.autograd.Function):
+    """Alpha-entmax with an analytic, support-masked backward.
+
+    For p_i = [(α-1)(x_i-τ)]_+^(1/(α-1)), the Jacobian-vector product is
+    q * (g - <g,q>/<1,q>) with q = p^(2-α) on the active support. This avoids
+    differentiating through the numerical threshold search itself.
+    """
+
+    @staticmethod
+    def forward(ctx, logits, alpha, dim):
+        dim = int(dim)
+        if dim < 0:
+            dim += logits.dim()
+        with torch.no_grad():
+            p = _entmax_bisect_forward(logits.float(), alpha=float(alpha), dim=dim)
+        ctx.save_for_backward(p)
+        ctx.alpha = float(alpha)
+        ctx.dim = dim
+        return p
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (p,) = ctx.saved_tensors
+        dim = ctx.dim
+        exponent = 2.0 - ctx.alpha
+        tiny = torch.finfo(p.dtype).tiny
+        support = p > 0
+        q = torch.where(support, p.clamp_min(tiny).pow(exponent), torch.zeros_like(p))
+        denom = q.sum(dim=dim, keepdim=True).clamp_min(tiny)
+        mean = (grad_output.float() * q).sum(dim=dim, keepdim=True) / denom
+        grad_logits = q * (grad_output.float() - mean)
+        return grad_logits.to(grad_output.dtype), None, None
+
+
+def _entmax_bisect(logits, alpha=1.3, dim=-1, n_iter=50):
+    """Stable alpha-entmax with explicit analytic backward."""
+    if alpha == 1.0:
+        return logits.softmax(dim=dim)
+    if not (1.0 < alpha <= 2.0):
+        raise ValueError("SMSA ENTMAX_ALPHA must be in (1, 2]")
+    return _EntmaxBisectFunction.apply(logits, float(alpha), int(dim))
+
+
+class Attention(nn.Module):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.,
+                 rpe=False, z_size=7, x_size=14):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = head_dim ** -0.5
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        self.rpe =rpe
+        if self.rpe:
+            relative_position_index = \
+                generate_2d_concatenated_self_attention_relative_positional_encoding_index([z_size, z_size],
+                                                                                           [x_size, x_size])
+            self.register_buffer("relative_position_index", relative_position_index)
+            # define a parameter table of relative position bias
+            self.relative_position_bias_table = nn.Parameter(torch.empty((num_heads,
+                                                                          relative_position_index.max() + 1)))
+            trunc_normal_(self.relative_position_bias_table, std=0.02)
+
+    def forward(self, x, mask=None, return_attention=False):
+        # x: B, N, C
+        # mask: [B, N, ] torch.bool
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+
+        if self.rpe:
+            relative_position_bias = self.relative_position_bias_table[:, self.relative_position_index].unsqueeze(0)
+            attn += relative_position_bias
+
+        if mask is not None:
+            attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2), float('-inf'),)
+
+        split_attn = False
+        len_t = 49
+        if split_attn:
+            attn_t = attn[..., :len_t].softmax(dim=-1)
+            attn_s = attn[..., len_t:].softmax(dim=-1)
+            attn = torch.cat([attn_t, attn_s], dim=-1)
+        else:
+            attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+
+        if return_attention:
+            return x, attn
+        else:
+            return x
+
+
+class Attention_talking_head(nn.Module):
+    # taken from https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/vision_transformer.py
+    # with slight modifications to add Talking Heads Attention (https://arxiv.org/pdf/2003.02436v1.pdf)
+    def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
+                 rpe=True, z_size=7, x_size=14):
+        super().__init__()
+
+        self.num_heads = num_heads
+
+        head_dim = dim // num_heads
+
+        self.scale = qk_scale or head_dim ** -0.5
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+
+        self.proj = nn.Linear(dim, dim)
+
+        self.proj_l = nn.Linear(num_heads, num_heads)
+        self.proj_w = nn.Linear(num_heads, num_heads)
+
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        self.rpe = rpe
+        if self.rpe:
+            relative_position_index = \
+                generate_2d_concatenated_self_attention_relative_positional_encoding_index([z_size, z_size],
+                                                                                           [x_size, x_size])
+            self.register_buffer("relative_position_index", relative_position_index)
+            # define a parameter table of relative position bias
+            self.relative_position_bias_table = nn.Parameter(torch.empty((num_heads,
+                                                                          relative_position_index.max() + 1)))
+            trunc_normal_(self.relative_position_bias_table, std=0.02)
+
+    def forward(self, x, mask=None):
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
+
+        attn = (q @ k.transpose(-2, -1))
+
+        if self.rpe:
+            relative_position_bias = self.relative_position_bias_table[:, self.relative_position_index].unsqueeze(0)
+            attn += relative_position_bias
+
+        if mask is not None:
+            attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2),
+                                    float('-inf'),)
+
+        attn = self.proj_l(attn.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+        attn = attn.softmax(dim=-1)
+
+        attn = self.proj_w(attn.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
+class Attention_st(nn.Module):
+    def __init__(self, dim, mode, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.,
+                 rpe=False, z_size=7, x_size=14, use_smsa=False,
+                 smsa_alpha=1.3, smsa_fp32=True):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = head_dim ** -0.5  # NOTE: Small scale for attention map normalization
+
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+        self.mode = mode
+        self.use_smsa = bool(use_smsa and mode == 's2t')
+        self.smsa_alpha = float(smsa_alpha)
+        self.smsa_fp32 = bool(smsa_fp32)
+        self.smsa_stats = None
+        # Optional inference-only diagnostic capture. It is enabled only by
+        # TBSI_ATTR_STATS=1 and does not alter the forward values.
+        self.last_smsa_attention = None
+        self.last_smsa_reference_attention = None
+        # P1 diagnostic-only cache. Disabled by default and never used by the
+        # forward path; it stores pre-dropout attention probabilities.
+        self.last_attention = None
+        # Training-only TSMS capture. Unlike last_smsa_attention this keeps
+        # the autograd graph alive until the actor has formed L_cov.
+        self.last_smsa_attention_for_loss = None
+        self.rpe =rpe
+        if self.rpe:
+            relative_position_index = \
+                generate_2d_concatenated_self_attention_relative_positional_encoding_index([z_size, z_size],
+                                                                                           [x_size, x_size])
+            self.register_buffer("relative_position_index", relative_position_index)
+            # define a parameter table of relative position bias
+            self.relative_position_bias_table = nn.Parameter(torch.empty((num_heads,
+                                                                          relative_position_index.max() + 1)))
+            trunc_normal_(self.relative_position_bias_table, std=0.02)
+
+    def forward(self, x, mask=None, return_attention=False, quality_mask=None,
+                template_fg_mask=None, conditioned_message_alpha=0.0,
+                conditioned_message_mode='off', conditioned_message_temperature=0.25):
+        """quality_mask: (B, N_search, 1) — per-search-token confidence in [0,1].
+        [Phase 1 Fix] Applied as PRE-softmax logit bias (instead of post-softmax multiply).
+        Principle: attention gates should operate in logit space, not probability space.
+        """
+        B, N, C = x.shape
+        self.last_attention = None
+        input_tokens = x
+
+        lens_z = 64  # Number of template tokens
+        lens_x = 256  # Number of search region tokens
+        if self.mode == 's2t':  # Search to template
+            q = x[:, :lens_z]  # B, lens_z, C
+            k = x[:, lens_z:]  # B, lens_x, C
+            v = x[:, lens_z:]  # B, lens_x, C
+        elif self.mode == 't2s':  # Template to search
+            q = x[:, lens_z:]  # B, lens_x, C
+            k = x[:, :lens_z]  # B, lens_z, C
+            v = x[:, :lens_z]  # B, lens_z, C
+        elif self.mode=='t2t':  # Template to template
+            q = x[:, :lens_z]  # B, lens_z, C
+            k = x[:, lens_z:]  # B, lens_z, C
+            v = x[:, lens_z:]  # B, lens_z, C
+        elif self.mode=='s2s':  # Search to search
+            q = x[:, :lens_x]  # B, lens_x, C
+            k = x[:, lens_x:]  # B, lens_x, C
+            v = x[:, lens_x:]  # B, lens_x, C
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale  # B, lens_z, lens_x; B, lens_x, lens_z
+
+        if self.rpe:
+            relative_position_bias = self.relative_position_bias_table[:, self.relative_position_index].unsqueeze(0)
+            attn += relative_position_bias
+
+        if mask is not None:
+            attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2), float('-inf'),)
+
+        # [Phase 1 Fix] Quality mask: convert [0,1] confidence → logit bias (pre-softmax)
+        # BEFORE: attn = softmax(attn) * quality_mask (post-softmax multiply — distorts distribution)
+        # AFTER:  attn = softmax(attn + log(quality_mask)) (pre-softmax bias — correct logit space)
+        if quality_mask is not None:
+            if self.mode in ('s2t', 't2t'):
+                qm = quality_mask.squeeze(-1).unsqueeze(1)  # (B, 1, 256)
+                qm_bias = torch.log(qm.clamp(min=1e-6))     # inverse sigmoid → logit
+                attn = attn + qm_bias
+            elif self.mode == 't2s':
+                qm_bias = torch.log(quality_mask.clamp(min=1e-6))  # (B, 256, 1)
+                attn = attn + qm_bias
+
+        if self.use_smsa:
+            # Keep the sparse probability geometry numerically stable under
+            # the baseline AMP training regime.
+            with torch.cuda.amp.autocast(enabled=False):
+                attn = _entmax_bisect(attn.float(), alpha=self.smsa_alpha, dim=-1)
+        else:
+            attn = attn.softmax(dim=-1)
+
+        if self.mode == 's2t' and os.environ.get('TCSI_DUMP_ATTENTION', '0') == '1':
+            self.last_attention = attn.detach().float().cpu()
+
+        if self.use_smsa:
+            # TSMS is training-only. Do not retain attention in inference;
+            # inference remains the original SMSA forward path.
+            self.last_smsa_attention_for_loss = attn if self.training else None
+            with torch.no_grad():
+                p = attn.float().clamp_min(torch.finfo(attn.dtype).tiny)
+                entropy = -(p * p.log()).sum(dim=-1).mean()
+                zero_ratio = (attn <= 1e-8).float().mean()
+                support = (attn > 1e-8).float().sum(dim=-1).mean()
+                norm_error = (attn.sum(dim=-1) - 1.0).abs().max()
+                self.smsa_stats = {
+                    'entropy': entropy.item(),
+                    'zero_ratio': zero_ratio.item(),
+                    'effective_support': support.item(),
+                    'norm_error': norm_error.item(),
+                    'nan_inf': float((~torch.isfinite(attn)).any().item()),
+                }
+            if os.environ.get('TBSI_ATTR_STATS', '0') == '1':
+                self.last_smsa_attention = attn.detach()
+            else:
+                self.last_smsa_attention = None
+        else:
+            self.last_smsa_attention_for_loss = None
+
+        attn = self.attn_drop(attn)
+
+        x = attn @ v  # B, lens_z/x, C
+        x = x.transpose(1, 2)  # B, C, lens_z/x
+        x = x.reshape(B, -1, C)  # B, lens_z/x, C; NOTE: Rearrange channels, marginal improvement
+        x = self.proj(x)
+        x = self.proj_drop(x)
+
+        # Search-position-conditioned modulation of the template-to-search
+        # message. The evidence is computed on the same 16x16 search axis as
+        # the message, so it cannot be confused with the 8x8 template axis.
+        # The default mode/alpha are exact no-ops for the parent path.
+        if (self.mode == 't2s' and template_fg_mask is not None and
+                conditioned_message_mode != 'off' and float(conditioned_message_alpha) != 0.0):
+            if template_fg_mask.shape != (B, lens_z):
+                raise ValueError('conditioned message foreground mask must be [B,64]')
+            weights = template_fg_mask.to(device=x.device, dtype=x.dtype).clamp_min(0.0)
+            template_tokens = input_tokens[:, :lens_z, :]
+            search_tokens = input_tokens[:, lens_z:, :]
+            template_norm = F.normalize(template_tokens.float(), dim=-1, eps=1e-6)
+            search_norm = F.normalize(search_tokens.float(), dim=-1, eps=1e-6)
+            proto = F.normalize((template_norm * weights.float().unsqueeze(-1)).sum(1) /
+                                weights.float().sum(1, keepdim=True).clamp_min(1e-6),
+                                dim=-1, eps=1e-6)
+            similarity = torch.matmul(proto.unsqueeze(1), search_norm.transpose(1, 2)).squeeze(1)
+            side = int(round(lens_x ** 0.5))
+            peak = similarity.argmax(dim=-1)
+            yy, xx = torch.meshgrid(torch.arange(side, device=x.device),
+                                    torch.arange(side, device=x.device), indexing='ij')
+            local = ((yy.reshape(1, -1) - (peak // side).unsqueeze(1)).abs() <= 1) & \
+                    ((xx.reshape(1, -1) - (peak % side).unsqueeze(1)).abs() <= 1)
+            background = similarity.masked_fill(local, float('-inf')).max(dim=-1, keepdim=True).values
+            evidence = torch.tanh((similarity - background) /
+                                  max(float(conditioned_message_temperature), 1e-6))
+            if conditioned_message_mode == 'shifted':
+                evidence = torch.roll(evidence.reshape(B, side, side),
+                                      shifts=(max(1, side // 2), max(1, side // 2)),
+                                      dims=(1, 2)).reshape(B, lens_x)
+            elif conditioned_message_mode != 'target':
+                raise ValueError('unsupported conditioned message mode: {}'.format(
+                    conditioned_message_mode))
+            alpha = float(conditioned_message_alpha)
+            x = x * (1.0 + alpha * evidence.to(dtype=x.dtype).unsqueeze(-1))
+            self.last_conditioned_message_stats = {
+                'mode': conditioned_message_mode,
+                'alpha': alpha,
+                'evidence_mean': float(evidence.mean().detach()),
+                'evidence_std': float(evidence.std().detach()),
+                'peak': peak.detach().cpu(),
+            }
+        else:
+            self.last_conditioned_message_stats = {'mode': 'off'}
+
+        if self.mode == 's2t':
+            x = torch.cat([x, k], dim=1)
+        elif self.mode == 't2s':
+            x = torch.cat([k, x], dim=1)
+        elif self.mode == 't2t':
+            x = torch.cat([x, k], dim=1)
+        elif self.mode == 's2s':
+            x = torch.cat([x, k], dim=1)
+
+        if return_attention:
+            return x, attn
+        else:
+            return x
