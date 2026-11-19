@@ -20,12 +20,15 @@ class StableLinear(nn.Module):
 
 class ReceiverSourceMassReallocator(nn.Module):
     def __init__(self, dim=768, context_dim=64, rank=32, max_delta=0.25,
-                 agreement_gate=False):
+                 agreement_gate=False, evidence_dim=3):
         super().__init__()
         self.dim = int(dim)
         self.context_dim = int(context_dim)
         self.rank = int(rank)
         self.max_delta = float(max_delta)
+        self.evidence_dim = int(evidence_dim)
+        if self.evidence_dim <= 0:
+            raise ValueError('evidence_dim must be positive')
         self.agreement_gate_enabled = bool(agreement_gate)
         if self.agreement_gate_enabled:
             from .source_agreement_delta_gate import SourceAgreementDeltaGate
@@ -36,7 +39,7 @@ class ReceiverSourceMassReallocator(nn.Module):
         self.source = StableLinear(dim, rank)
         self.context_norm = nn.LayerNorm(context_dim)
         self.context = StableLinear(context_dim, rank)
-        self.evidence = StableLinear(3, rank)
+        self.evidence = StableLinear(self.evidence_dim, rank)
         self.readout = nn.Sequential(
             StableLinear(3 * rank, rank, bias=True), nn.GELU(),
             StableLinear(rank, 1, bias=True))
@@ -57,7 +60,7 @@ class ReceiverSourceMassReallocator(nn.Module):
             raise ValueError('source_value must be [B,H,Ns,D_head]')
         if source_context.shape != (b, ns, self.context_dim):
             raise ValueError('source_context shape mismatch')
-        if source_evidence.shape != (b, ns, 3):
+        if source_evidence.shape != (b, ns, self.evidence_dim):
             raise ValueError('source_evidence shape mismatch')
 
         source_merged = source_value.transpose(1, 2).reshape(b, ns, self.dim)

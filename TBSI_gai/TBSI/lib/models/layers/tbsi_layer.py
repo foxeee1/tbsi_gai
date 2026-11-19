@@ -23,6 +23,10 @@ from lib.models.layers.conservative_source_allocation import ConservativeSourceA
 from lib.models.layers.early_gate_evidence_gradient_isolation import EarlyGateEvidenceGradientIsolation
 from lib.models.layers.query_source_conditional_write import QuerySourceConditionalWrite
 from lib.models.layers.receiver_source_mass_reallocator import ReceiverSourceMassReallocator
+from lib.models.layers.five_role_source_evidence import FiveRoleSourceEvidence
+from lib.models.layers.direct_evidence_modulation import (
+    DirectEvidenceModulation,
+)
 from lib.models.layers.cycle_laplacian_message_repair import CycleLaplacianMessageRepair
 from lib.models.layers.receiver_conditioned_message_residual import (
     ReceiverConditionedMessageResidual,
@@ -55,6 +59,8 @@ class V2TemplateFusion(nn.Module):
                  query_source_write_max_delta=0.15,
                  mass_redist_enable=False, mass_redist_mode="pair",
                  mass_redist_agreement_gate=False,
+                 mass_redist_action='pair', mass_redist_evidence_mode='legacy3',
+                 direct_evidence_max_delta=0.25,
                  early_target_support_mode="max",
                  early_target_support_temperature=0.1,
                  spatial_pair_mode="off", spatial_pair_temperature=0.1,
@@ -132,7 +138,9 @@ class V2TemplateFusion(nn.Module):
             if (not self.early_conditioned_cross_gate or not early_gate_value_modulation or
                     early_gate_source_mode != 'dynamic' or early_source_evidence or
                     structured_spatial_evidence or dual_message_mode != 'off' or
-                    fu_enabled or receiver_cross_write or cross_mass_preserving_relation or
+                    fu_enabled or receiver_cross_write or
+                    (cross_mass_preserving_relation and
+                     __import__('os').environ.get('TBSI_FORCE_FIXED_MR_GATE', '0') != '1') or
                     spatial_pair_mode != 'off' or early_gate_conservative_allocation or
                     early_gate_evidence_gradient_isolation):
                 raise ValueError('search-context gain requires the native Early gate action')
@@ -154,6 +162,14 @@ class V2TemplateFusion(nn.Module):
         self.mass_redist_enabled = bool(mass_redist_enable)
         self.mass_redist_mode = str(mass_redist_mode)
         self.mass_redist_agreement_gate = bool(mass_redist_agreement_gate)
+        self.mass_redist_action = str(mass_redist_action).lower()
+        self.mass_redist_evidence_mode = str(mass_redist_evidence_mode).lower()
+        if self.mass_redist_action not in ('pair', 'direct'):
+            raise ValueError('unknown Mass-Redist action')
+        if self.mass_redist_evidence_mode not in ('legacy3', 'five_role'):
+            raise ValueError('unknown Mass-Redist evidence mode')
+        if self.mass_redist_action == 'direct' and not self.mass_redist_enabled:
+            raise ValueError('direct evidence action requires Mass-Redist enabled')
         if self.mass_redist_agreement_gate and (
                 not self.mass_redist_enabled or self.mass_redist_mode != 'pair'):
             raise ValueError('source-agreement delta gate requires pair Mass-Redist')
@@ -175,7 +191,8 @@ class V2TemplateFusion(nn.Module):
             if not (self.early_conditioned_cross_gate and self.early_gate_value_modulation and
                     self.early_gate_search_context_mode == 'cross'):
                 raise ValueError('Mass-Redist requires C cross-context source Value gating')
-            if self.cross_mass_preserving_relation_enabled or self.query_source_write_enabled:
+            if ((self.cross_mass_preserving_relation_enabled or self.query_source_write_enabled) and
+                    __import__('os').environ.get('TBSI_FORCE_FIXED_MR_GATE', '0') != '1'):
                 raise ValueError('Mass-Redist cannot be combined with another relation/write action')
             with torch.random.fork_rng(devices=[]):
                 if self.mass_redist_mode == 'pair':
@@ -190,8 +207,22 @@ class V2TemplateFusion(nn.Module):
                     allocator = LowRankJointMassReallocator
                     options = {'allocation': ('joint' if self.mass_redist_mode == 'lr_joint'
                                                else 'conserved')}
-                self.mass_reallocator_rgb = allocator(dim=dim, **options)
-                self.mass_reallocator_tir = allocator(dim=dim, **options)
+                if self.mass_redist_action == 'direct':
+                    if self.mass_redist_mode != 'pair':
+                        raise ValueError('direct evidence action requires pair mode')
+                    self.direct_evidence_rgb = DirectEvidenceModulation(
+                        evidence_dim=5 if self.mass_redist_evidence_mode == 'five_role' else 3,
+                        max_delta=direct_evidence_max_delta)
+                    self.direct_evidence_tir = DirectEvidenceModulation(
+                        evidence_dim=5 if self.mass_redist_evidence_mode == 'five_role' else 3,
+                        max_delta=direct_evidence_max_delta)
+                else:
+                    allocator_options = dict(options)
+                    if self.mass_redist_mode == 'pair':
+                        allocator_options['evidence_dim'] = (
+                            5 if self.mass_redist_evidence_mode == 'five_role' else 3)
+                    self.mass_reallocator_rgb = allocator(dim=dim, **allocator_options)
+                    self.mass_reallocator_tir = allocator(dim=dim, **allocator_options)
         if self.query_source_write_enabled:
             self.query_source_write = QuerySourceConditionalWrite(
                 self.head_dim, query_source_write_hidden, query_source_write_max_delta)
@@ -247,6 +278,8 @@ class V2TemplateFusion(nn.Module):
                     hidden_dim=early_source_evidence_hidden,
                     max_delta=early_source_evidence_delta,
                     topk=early_source_evidence_topk)
+            if self.mass_redist_enabled and self.mass_redist_evidence_mode == 'five_role':
+                self.five_role_evidence = FiveRoleSourceEvidence()
             self.fu_enabled = bool(fu_enabled)
             if self.fu_enabled:
                 self.fu_allocator = FineGrainedUnifiedAllocator(
@@ -337,6 +370,15 @@ class V2TemplateFusion(nn.Module):
             else:
                 gate_log_gain = None
                 gate = x.new_ones((evidence.shape[0], evidence.shape[1], 2))
+            if (self.mass_redist_enabled and self.mass_redist_evidence_mode == 'five_role'):
+                if template_boxes is None:
+                    raise ValueError('five-role MR evidence requires transformed template boxes')
+                rgb_roles, tir_roles, evidence_diag = self.five_role_evidence(
+                    rgb_similarity, tir_similarity, template_boxes)
+                self.last_five_role_evidence = evidence_diag
+            else:
+                rgb_roles = tir_roles = None
+                self.last_five_role_evidence = None
             if self.capture_gate_utility and self.early_gate_value_modulation:
                 if gate_log_gain is None:
                     raise RuntimeError('utility capture requires the native dynamic gate')
@@ -409,13 +451,25 @@ class V2TemplateFusion(nn.Module):
                         self_tir, v_rgb, self.search_context_values[..., 0],
                         evidence, cross_attention=attn_tr)
                 else:
-                    relation_rt = self.mass_reallocator_rgb(
-                        attn_rt * gate[:, None, None, :, 1], self_rgb, v_tir,
-                        self.search_context_values[..., 1], evidence[..., [1, 0, 2]])
-                    relation_tr = self.mass_reallocator_tir(
-                        attn_tr * gate[:, None, None, :, 0], self_tir, v_rgb,
-                        self.search_context_values[..., 0], evidence)
-                gated_tir, gated_rgb = cross_tir, cross_rgb
+                    source_evidence_tir = (tir_roles if tir_roles is not None
+                                           else evidence[..., [1, 0, 2]])
+                    source_evidence_rgb = (rgb_roles if rgb_roles is not None
+                                           else evidence)
+                    cross_rt = attn_rt * gate[:, None, None, :, 1]
+                    cross_tr = attn_tr * gate[:, None, None, :, 0]
+                    if self.mass_redist_action == 'direct':
+                        relation_rt, _ = self.direct_evidence_rgb(
+                            cross_rt, source_evidence_tir)
+                        relation_tr, _ = self.direct_evidence_tir(
+                            cross_tr, source_evidence_rgb)
+                    else:
+                        relation_rt = self.mass_reallocator_rgb(
+                            cross_rt, self_rgb, v_tir,
+                            self.search_context_values[..., 1], source_evidence_tir)
+                        relation_tr = self.mass_reallocator_tir(
+                            cross_tr, self_tir, v_rgb,
+                            self.search_context_values[..., 0], source_evidence_rgb)
+                    gated_tir, gated_rgb = cross_tir, cross_rgb
             if self.msha_message_normalization != 'off':
                 msg_rr, msg_rt, _ = self.message_normalization(
                     attn_rr, attn_rt, v_rgb, gated_tir)
@@ -593,6 +647,8 @@ class TBSILayer(nn.Module):
                  query_source_write_max_delta=0.15,
                  mass_redist_enable=False, mass_redist_mode="pair",
                  mass_redist_agreement_gate=False,
+                 mass_redist_action='pair', mass_redist_evidence_mode='legacy3',
+                 direct_evidence_max_delta=0.25,
                  early_target_support_mode="max",
                  early_target_support_temperature=0.1,
                  spatial_pair_mode="off", spatial_pair_temperature=0.1,
@@ -638,6 +694,9 @@ class TBSILayer(nn.Module):
                 mass_redist_enable=mass_redist_enable,
                 mass_redist_mode=mass_redist_mode,
                 mass_redist_agreement_gate=mass_redist_agreement_gate,
+                mass_redist_action=mass_redist_action,
+                mass_redist_evidence_mode=mass_redist_evidence_mode,
+                direct_evidence_max_delta=direct_evidence_max_delta,
                 early_target_support_mode=early_target_support_mode,
                 early_target_support_temperature=early_target_support_temperature,
                 spatial_pair_mode=spatial_pair_mode,
@@ -692,6 +751,9 @@ class TBSILayer(nn.Module):
                 mass_redist_enable=mass_redist_enable,
                 mass_redist_mode=mass_redist_mode,
                 mass_redist_agreement_gate=mass_redist_agreement_gate,
+                mass_redist_action=mass_redist_action,
+                mass_redist_evidence_mode=mass_redist_evidence_mode,
+                direct_evidence_max_delta=direct_evidence_max_delta,
                 early_target_support_mode=early_target_support_mode,
                 early_target_support_temperature=early_target_support_temperature,
                 spatial_pair_mode=spatial_pair_mode,

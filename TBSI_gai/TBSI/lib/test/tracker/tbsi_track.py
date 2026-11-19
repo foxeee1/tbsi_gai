@@ -32,7 +32,8 @@ class TBSITrack(BaseTracker):
         self.use_structured_template_boxes = (
             getattr(self.cfg.MODEL.BACKBONE, 'DUAL_MESSAGE_MODE', 'off') != 'off' or
             getattr(self.cfg.MODEL.BACKBONE, 'EARLY_TARGET_SUPPORT_MODE', 'max') != 'max' or
-            getattr(self.cfg.MODEL.BACKBONE, 'CBMR_TEMPLATE_BOXES', False))
+            getattr(self.cfg.MODEL.BACKBONE, 'CBMR_TEMPLATE_BOXES', False) or
+            getattr(self.cfg.MODEL.BACKBONE, 'MASS_REDIST_EVIDENCE_MODE', 'legacy3') == 'five_role')
         self.use_fp16 = os.environ.get('TBSI_INFER_FP16', '1') != '0'
         self.network = network.cuda()
         if self.use_fp16:

@@ -53,7 +53,8 @@ class TBSITrackActor(BaseActor):
         template_img_i = data['infrared']['template_images'][0].view(-1, *data['infrared']['template_images'].shape[2:])
         if (getattr(self.cfg.MODEL.BACKBONE, 'DUAL_MESSAGE_MODE', 'off') != 'off' or
                 getattr(self.cfg.MODEL.BACKBONE, 'EARLY_TARGET_SUPPORT_MODE', 'max') != 'max' or
-                getattr(self.cfg.MODEL.BACKBONE, 'CBMR_TEMPLATE_BOXES', False)):
+                getattr(self.cfg.MODEL.BACKBONE, 'CBMR_TEMPLATE_BOXES', False) or
+                getattr(self.cfg.MODEL.BACKBONE, 'MASS_REDIST_EVIDENCE_MODE', 'legacy3') == 'five_role'):
             template_box_v = data['visible']['template_anno'][0].view(-1, 4)
             template_box_i = data['infrared']['template_anno'][0].view(-1, 4)
             if not torch.allclose(template_box_v, template_box_i, atol=1e-6, rtol=0):

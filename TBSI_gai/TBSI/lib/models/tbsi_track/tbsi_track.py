@@ -449,6 +449,12 @@ def build_tbsi_track(cfg, training=True):
                                             mass_redist_agreement_gate=getattr(
                                                 cfg.MODEL.BACKBONE,
                                                 'MASS_REDIST_AGREEMENT_GATE', False),
+                                            mass_redist_action=getattr(
+                                                cfg.MODEL.BACKBONE, 'MASS_REDIST_ACTION', 'pair'),
+                                            mass_redist_evidence_mode=getattr(
+                                                cfg.MODEL.BACKBONE, 'MASS_REDIST_EVIDENCE_MODE', 'legacy3'),
+                                            direct_evidence_max_delta=getattr(
+                                                cfg.MODEL.BACKBONE, 'DIRECT_EVIDENCE_MAX_DELTA', 0.25),
                                             cbmr_enable=getattr(
                                                 cfg.MODEL.BACKBONE, 'CBMR_ENABLE', False),
                                             cbmr_strength=getattr(
@@ -604,4 +610,28 @@ def build_tbsi_track(cfg, training=True):
                                     mode=value_direction.MODE)
         else:
             raise ValueError('Unknown Value receiver mode: ' + str(receiver_mode))
+    if os.environ.get('TBSI_FORCE_FIXED_MR_GATE', '0') == '1':
+        layers = [m for m in model.modules()
+                  if getattr(m, 'mass_redist_enabled', False)]
+        if len(layers) != 3:
+            raise RuntimeError('aligned MR run expected three mass-reallocation layers')
+        for layer in layers:
+            with torch.no_grad():
+                layer.early_gate_scale.zero_()
+            layer.early_gate_scale.requires_grad_(False)
+            for parameter in layer.early_gate.parameters():
+                parameter.requires_grad_(False)
+        print('TBSI_FORCE_FIXED_MR_GATE: source gate fixed to g=1 for aligned run')
+    initial_state_path = os.environ.get('TBSI_ALIGNED_INITIAL_STATE', '')
+    if training and initial_state_path:
+        snapshot = torch.load(initial_state_path, map_location='cpu')
+        source_state = snapshot.get('state', snapshot)
+        current = model.state_dict()
+        loaded = 0
+        for key, value in source_state.items():
+            if key in current and current[key].shape == value.shape:
+                current[key].copy_(value)
+                loaded += 1
+        model.load_state_dict(current, strict=True)
+        print('TBSI_ALIGNED_INITIAL_STATE: loaded %d shape-compatible tensors' % loaded)
     return model

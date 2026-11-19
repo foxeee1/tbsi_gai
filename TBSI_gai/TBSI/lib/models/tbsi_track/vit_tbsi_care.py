@@ -47,6 +47,7 @@ from lib.models.layers.cross_mass_preserving_relation import reset_cross_mass_pr
 from lib.models.layers.receiver_conditioned_message_residual import (
     reset_receiver_conditioned_message_residual,
 )
+from lib.models.layers.direct_evidence_modulation import reset_direct_evidence_modulation
 
 
 class Attention(nn.Module):
@@ -150,6 +151,8 @@ class VisionTransformerTBSI(BaseBackbone):
                  query_source_write_max_delta=0.15,
                  mass_redist_enable=False, mass_redist_mode="pair",
                  mass_redist_agreement_gate=False,
+                 mass_redist_action='pair', mass_redist_evidence_mode='legacy3',
+                 direct_evidence_max_delta=0.25,
                  early_target_support_mode="max",
                  early_target_support_temperature=0.1,
                  spatial_pair_mode="off", spatial_pair_temperature=0.1,
@@ -256,6 +259,9 @@ class VisionTransformerTBSI(BaseBackbone):
                     mass_redist_enable=mass_redist_enable,
                     mass_redist_mode=mass_redist_mode,
                     mass_redist_agreement_gate=mass_redist_agreement_gate,
+                    mass_redist_action=mass_redist_action,
+                    mass_redist_evidence_mode=mass_redist_evidence_mode,
+                    direct_evidence_max_delta=direct_evidence_max_delta,
                     cbmr_enable=cbmr_enable,
                     cbmr_strength=cbmr_strength,
                     cbmr_background_threshold=cbmr_background_threshold,
@@ -278,6 +284,7 @@ class VisionTransformerTBSI(BaseBackbone):
         reset_receiver_source_mass_reallocator(self)
         reset_cross_mass_preserving_relation(self)
         reset_receiver_conditioned_message_residual(self)
+        reset_direct_evidence_modulation(self)
         from lib.models.layers.early_gate_search_context import reset_early_gate_search_context
         reset_early_gate_search_context(self)
 

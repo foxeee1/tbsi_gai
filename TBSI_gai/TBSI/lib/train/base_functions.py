@@ -276,6 +276,9 @@ def get_optimizer_scheduler(net, cfg):
     if cfg.TRAIN.SCHEDULER.TYPE == 'step':
         lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, cfg.TRAIN.LR_DROP_EPOCH)
     elif cfg.TRAIN.SCHEDULER.TYPE == "Mstep":
+        if os.environ.get('TBSI_FORCE_U936_SCHEDULER', '0') == '1':
+            cfg.TRAIN.SCHEDULER.MILESTONES = [2]
+            cfg.TRAIN.SCHEDULER.GAMMA = 0.1
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                             milestones=cfg.TRAIN.SCHEDULER.MILESTONES,
                                                             gamma=cfg.TRAIN.SCHEDULER.GAMMA)
